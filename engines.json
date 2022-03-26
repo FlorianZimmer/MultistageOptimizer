@@ -1,0 +1,82 @@
+{
+  "engines": [
+    {
+      "name": "M_1U_SL",
+      "isp_sl": 344.5,
+      "isp_vac": 414,
+      "mass": 9071
+    },
+    {
+      "name": "M_1U",
+      "isp_sl": 300,
+      "isp_vac": 430,
+      "mass": 9071
+    },
+    {
+      "name": "LR105_NA_5",
+      "isp_sl": 210,
+      "isp_vac": 301,
+      "mass": 460.7
+    },
+    {
+      "name": "LR105_NA_3",
+      "isp_sl": 215,
+      "isp_vac": 309,
+      "mass": 460
+    },
+    {
+      "name": "LR79",
+      "isp_sl": 248,
+      "isp_vac": 288,
+      "mass": 945.7
+    },
+    {
+      "name": "XLR_99",
+      "isp_sl": 239,
+      "isp_vac": 276,
+      "mass": 415
+    },
+    {
+      "name": "RD_108_8D75_1958",
+      "isp_sl": 246,
+      "isp_vac": 315,
+      "mass": 1249
+    },
+    {
+      "name": "RD_107_8D74",
+      "isp_sl": 255.67,
+      "isp_vac": 312.64,
+      "mass": 119
+    },
+    {
+      "name": "RS_25D_E",
+      "isp_sl": 363,
+      "isp_vac": 453,
+      "mass": 3527
+    },
+    {
+      "name": "RL_60",
+      "isp_sl": 230,
+      "isp_vac": 465,
+      "mass": 998
+    },
+    {
+      "name": "Raptor_vac",
+      "isp_sl": 240,
+      "isp_vac": 380,
+      "mass": 1875
+    },
+    {
+      "name": "RL-10-CECE-Base",
+      "isp_sl": 100,
+      "isp_vac": 460,
+      "mass": 210
+    },
+    {
+      "name": "J2X",
+      "isp_sl": 200,
+      "isp_vac": 448,
+      "mass": 2470
+    }
+  ]
+}

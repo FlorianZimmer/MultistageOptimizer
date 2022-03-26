@@ -1,0 +1,29 @@
+{
+  "g_body": 9.81,
+  "deltaVmission": 20000,
+  "mission_payload": 1022,
+
+  "stages": [
+    {
+      "engine": "RL-10-CECE-Base",
+      "engine_count": 1,
+      "total_mass": 15019,
+      "dry_mass": 552.7,
+      "wet_mass": 14597
+    },
+    {
+      "engine": "J2X",
+      "engine_count": 1,
+      "total_mass": 85471,
+      "dry_mass": 3209,
+      "wet_mass": 82120
+    },
+    {
+      "engine": "RS_25D_E",
+      "engine_count": 2,
+      "total_mass": 190644,
+      "dry_mass": 6666,
+      "wet_mass": 180300
+    }
+  ]
+}

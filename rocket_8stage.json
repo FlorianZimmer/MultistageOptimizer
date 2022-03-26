@@ -1,0 +1,64 @@
+{
+  "g_body": 9.81,
+  "deltaVmission": 32000,
+  "mission_payload": 1022,
+
+  "stages": [
+    {
+      "engine": "RL-10-CECE-Base",
+      "engine_count": 1,
+      "total_mass": 16028,
+      "dry_mass": 590.9,
+      "wet_mass": 15610
+    },
+    {
+      "engine": "J2X",
+      "engine_count": 1,
+      "total_mass": 73587,
+      "dry_mass": 2745,
+      "wet_mass": 70240
+    },
+    {
+      "engine": "RS_25D_E",
+      "engine_count": 1,
+      "total_mass": 162929,
+      "dry_mass": 5781,
+      "wet_mass": 156400
+    },
+    {
+      "engine": "RS_25D_E",
+      "engine_count": 1,
+      "total_mass": 189786,
+      "dry_mass": 6555,
+      "wet_mass": 177300
+    },
+    {
+      "engine": "M_1U",
+      "engine_count": 1,
+      "total_mass": 389902,
+      "dry_mass": 15450,
+      "wet_mass": 372100
+    },
+    {
+      "engine": "M_1U",
+      "engine_count": 3,
+      "total_mass": 852550,
+      "dry_mass": 33570,
+      "wet_mass": 808500
+    },
+    {
+      "engine": "M_1U",
+      "engine_count": 5,
+      "total_mass": 1466400,
+      "dry_mass": 57120,
+      "wet_mass": 1375000
+    },
+    {
+      "engine": "M_1U_SL",
+      "engine_count": 28,
+      "total_mass": 5488090,
+      "dry_mass": 215480,
+      "wet_mass": 5188000
+    }
+  ]
+}
