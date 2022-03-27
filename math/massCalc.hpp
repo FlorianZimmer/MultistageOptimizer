@@ -76,5 +76,8 @@ static void distMass(bool verbose, int start, int end, long long nCombinations, 
             }
         }
     }
+    delete[] inert_mass_rest;
+    delete[] inert_mass_fract;
+    delete[] isp_vac;
     /*std::cout << "thread " << (int)((double)((double)end / (double)nCombinations) * 24) << " closed\n";*/
 }

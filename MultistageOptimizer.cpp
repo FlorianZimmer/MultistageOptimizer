@@ -50,18 +50,20 @@ static void outputArr(double* arr, int sizeX)
 
 int main()
 {
-    //import Data from json files
-    vector<Engine> engineList = importEngines("config/engines.json");
-    Rocket rocket = importRocket("config/rocket.json", engineList);
-
-    //switches -> should be moved to function call or config file
     json config = readJson("config/config.json");
     bool verbose = config["verbose"];       //output for debbugging
     bool useMultiCore = config["useMultiCore"];  //using multicore and verbose at the same time can cause gibberish output
     //bool highPrec = true;
     unsigned long long maxRAM = config["maxRAM"]; //max allowed RAM usage in byte, is the limiting size for the array distributions
     //max is 255 as values are stored as 1 byte chars in the array distributions
-    int precision = config["precision"];        //increment of distributions for calculations; too high numbers can cause overflow; should warn user of that -> in the future
+    int precision = config["precision"];        //increment of distributions for calculations; too high numbers can cause overflow
+
+    //import Data from json files
+    vector<Engine> engineList = importEngines(config["enginesPath"]);
+    Rocket rocket = importRocket(config["rocketPath"], engineList);
+
+    //switches -> should be moved to function call or config file
+    
 
     unsigned long long nCombinations = nCr(precision - 1, rocket.stages.size() - 1); //stars and bars theorem one
 
@@ -77,8 +79,6 @@ int main()
         std::cout << "# Combinations: " << nCombinations << "\n\n";
 
         //create static 2D array using unsigned char, to save memory, because bigger numbers than 255 (even far lower numbers for that matter) for precision are unnecessarily computaionally expensive
-        //size of array cant be bigger than (2^32) - 1  4294967296
-        //unsigned char* test = new unsigned char[pow(2,36)];
         unsigned char* distributions = new unsigned char[nCombinations * rocket.stages.size()]; //access with distributions[j*nCombinations+i]
 
         //timer for function runtime checking
@@ -148,7 +148,7 @@ int main()
         }
 
         duration = (std::clock() - start) / (double)CLOCKS_PER_SEC;
-        std::cout << duration << " seconds to calculate mass off all possible distributions" << "\n\n";
+        std::cout << duration << " seconds to calculate mass of all possible distributions" << "\n\n";
 
         //timer for function runtime checking
         start = std::clock();
@@ -186,6 +186,11 @@ int main()
 
 
         delete[] distributions;
+        delete[] massDistributions;
+        delete[] bestDistro;
+        delete[] newArr;
+        std::cout << "\nPress Enter to end programm";
+        getchar();
     }
     
 }
