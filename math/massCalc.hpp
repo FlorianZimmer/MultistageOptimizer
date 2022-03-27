@@ -76,5 +76,5 @@ static void distMass(bool verbose, int start, int end, long long nCombinations, 
             }
         }
     }
-    std::cout << "thread " << (int)((double)((double)end / (double)nCombinations) * 24) << " closed\n";
+    /*std::cout << "thread " << (int)((double)((double)end / (double)nCombinations) * 24) << " closed\n";*/
 }

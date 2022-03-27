@@ -37,3 +37,10 @@ static vector<Stage> extractStages(vector<Engine> engineList, json file) {
     }
     return all_stages;
 }
+
+static Rocket importRocket(string path, vector<Engine> engineList) {
+    json file = readJson(path);
+    double g_body = file["g_body"];
+    Rocket rocket(file["g_body"], file["mission_payload"], file["deltaVmission"], extractStages(engineList, file));
+    return rocket;
+}

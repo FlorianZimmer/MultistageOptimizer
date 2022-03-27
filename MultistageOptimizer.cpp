@@ -3,8 +3,8 @@ Filename: MultistageOptimizer.cpp
 Description : Calculate optimal mass for each stage given a DeltaV requirement on a multistage Rocket
 Source of math equations : http://www.projectrho.com/public_html/rocket/multistage.php
 Author: Florian Zimmer
-Version : 0.6
-Last Changed : 26.03.2021
+Version : 0.7
+Last Changed : 27.03.2021
 Changelog :
 0.1 basic functionality/port from python project
 0.2 debugging
@@ -12,7 +12,7 @@ Changelog :
 0.4 cleanup code
 0.5 fix Perfomance Issues and Multithreading
 0.6 split files
-0.7 add config
+0.7 added config
 */
 
 #include <iostream>
@@ -30,13 +30,6 @@ using json = nlohmann::json;
 #include "read_json/read_json.hpp"
 
 using namespace std;
-
-static Rocket importRocket(string path, vector<Engine> engineList) {
-    json file = readJson(path);
-    double g_body = file["g_body"];
-    Rocket rocket(file["g_body"], file["mission_payload"], file["deltaVmission"], extractStages(engineList, file));
-    return rocket;
-}
 
 static void output2Darr(unsigned char* arr, int sizeY, int sizeX)
 {
@@ -62,13 +55,13 @@ int main()
     Rocket rocket = importRocket("config/rocket.json", engineList);
 
     //switches -> should be moved to function call or config file
-    bool verbose = false;       //output for debbugging
-    bool useMultiCore = true;  //using multicore and verbose at the same time can cause gibberish output
+    json config = readJson("config/config.json");
+    bool verbose = config["verbose"];       //output for debbugging
+    bool useMultiCore = config["useMultiCore"];  //using multicore and verbose at the same time can cause gibberish output
     //bool highPrec = true;
-    unsigned long long maxRAM = pow(2, 34); //max allowed RAM usage, is the limiting size for the array distributions -> 2^34 = 16GiB
-
+    unsigned long long maxRAM = config["maxRAM"]; //max allowed RAM usage in byte, is the limiting size for the array distributions
     //max is 255 as values are stored as 1 byte chars in the array distributions
-    int precision = 58;        //increment of distributions for calculations; too high numbers can cause overflow; should warn user of that -> in the future
+    int precision = config["precision"];        //increment of distributions for calculations; too high numbers can cause overflow; should warn user of that -> in the future
 
     unsigned long long nCombinations = nCr(precision - 1, rocket.stages.size() - 1); //stars and bars theorem one
 
@@ -81,7 +74,7 @@ int main()
     else {
         std::cout << "For the number of stages currently given, the maximum precision can be raised to: " << calcMaxPrecDown(255, rocket.stages.size(), maxRAM, nCombinations) << "\n\n";
 
-        std::cout << "Combinations: " << nCombinations << "\n\n";
+        std::cout << "# Combinations: " << nCombinations << "\n\n";
 
         //create static 2D array using unsigned char, to save memory, because bigger numbers than 255 (even far lower numbers for that matter) for precision are unnecessarily computaionally expensive
         //size of array cant be bigger than (2^32) - 1  4294967296
@@ -148,8 +141,6 @@ int main()
         for (auto& th : threads) {
             th.join();
         }
-
-        std::cout << "calculating rest" << "\n\n";
 
         //in case of a number of possibilitys not evenly divisible by number of threads do the rest of them single threaded here
         for (int i = threadBlock * nThreads; i < nCombinations; i++) {
