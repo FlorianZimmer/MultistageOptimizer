@@ -19,7 +19,7 @@ i.e. for a two stage Rocket with a precision of 150 the first calculation will b
 1st Stage 1/150 of total deltaV\
 2nd Stage 149/150 of total deltaV
                                                                                      
-maxRAM 				-> maximum allowed RAM usage in bytes. Will warn user if defined parameters will cause more RAM usage than here specified.
+maxRAM 				-> maximum allowed RAM usage in bytes. Will warn user if defined parameters will cause more RAM usage than specified here.
   
 verbose 			-> should only be used for debugging, as it slows down the programm alot and in single-threaded mode, as the output isnt orderd when using multithreading.
   
