@@ -139,19 +139,25 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="json.hpp" />
+    <ClInclude Include="math\massCalc.hpp" />
+    <ClInclude Include="math\math.hpp" />
+    <ClInclude Include="read_json\json.hpp" />
+    <ClInclude Include="read_json\read_json.hpp" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="resource1.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="engines.json" />
-    <None Include="rocket.json" />
-    <None Include="rocket_3stage.json" />
-    <None Include="rocket_4stage.json" />
-    <None Include="rocket_8stage.json" />
+    <ClInclude Include="rocket_definition\Engine.hpp" />
+    <ClInclude Include="rocket_definition\Rocket.hpp" />
+    <ClInclude Include="rocket_definition\Stage.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MultistageOptimizer.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="config\engines.json" />
+    <None Include="config\rocket.json" />
+    <None Include="config\rocket_3stage.json" />
+    <None Include="config\rocket_4stage.json" />
+    <None Include="config\rocket_8stage.json" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

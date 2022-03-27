@@ -15,36 +15,54 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="json.hpp">
-      <Filter>Headerdateien</Filter>
-    </ClInclude>
     <ClInclude Include="resource.h">
       <Filter>Headerdateien</Filter>
     </ClInclude>
     <ClInclude Include="resource1.h">
       <Filter>Headerdateien</Filter>
     </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="engines.json">
-      <Filter>Ressourcendateien</Filter>
-    </None>
-    <None Include="rocket.json">
-      <Filter>Ressourcendateien</Filter>
-    </None>
-    <None Include="rocket_3stage.json">
-      <Filter>Ressourcendateien</Filter>
-    </None>
-    <None Include="rocket_4stage.json">
-      <Filter>Ressourcendateien</Filter>
-    </None>
-    <None Include="rocket_8stage.json">
-      <Filter>Ressourcendateien</Filter>
-    </None>
+    <ClInclude Include="math\math.hpp">
+      <Filter>Quelldateien</Filter>
+    </ClInclude>
+    <ClInclude Include="math\massCalc.hpp">
+      <Filter>Quelldateien</Filter>
+    </ClInclude>
+    <ClInclude Include="read_json\json.hpp">
+      <Filter>Headerdateien</Filter>
+    </ClInclude>
+    <ClInclude Include="read_json\read_json.hpp">
+      <Filter>Quelldateien</Filter>
+    </ClInclude>
+    <ClInclude Include="rocket_definition\Engine.hpp">
+      <Filter>Headerdateien</Filter>
+    </ClInclude>
+    <ClInclude Include="rocket_definition\Rocket.hpp">
+      <Filter>Headerdateien</Filter>
+    </ClInclude>
+    <ClInclude Include="rocket_definition\Stage.hpp">
+      <Filter>Headerdateien</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MultistageOptimizer.cpp">
       <Filter>Quelldateien</Filter>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="config\engines.json">
+      <Filter>Ressourcendateien</Filter>
+    </None>
+    <None Include="config\rocket.json">
+      <Filter>Ressourcendateien</Filter>
+    </None>
+    <None Include="config\rocket_3stage.json">
+      <Filter>Ressourcendateien</Filter>
+    </None>
+    <None Include="config\rocket_4stage.json">
+      <Filter>Ressourcendateien</Filter>
+    </None>
+    <None Include="config\rocket_8stage.json">
+      <Filter>Ressourcendateien</Filter>
+    </None>
   </ItemGroup>
 </Project>
