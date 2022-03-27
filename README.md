@@ -13,7 +13,8 @@ Options can be found in config/config.json.
 
 useMultiCore	-> if program should utilize all available cores.
 
-precision 		-> the number specifies the combined steps the program should take in splitting the deltaV; higher equals better but cant go above 255 due to implementing the array that holds these numbers as chars.
+precision 		-> the number specifies the combined steps the program should take in splitting the deltaV;\
+higher equals better, but cant go above 255 due to implementing the array that holds these numbers as chars.
 
 i.e. for a two stage Rocket with a precision of 150 the first calculation will be:\
 1st Stage 1/150 of total deltaV\
