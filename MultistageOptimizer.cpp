@@ -71,6 +71,8 @@ int main()
     if (safeMULT_ULLONG(nCombinations, rocket.stages.size()) + (nCombinations * sizeof(unsigned long)) >= maxRAM) {
         std::cout << "Precision too high for the amount of stages!\n\nDecrease precision, number of stages or increase allowed RAM until this error dissappears. " << "\n\n";
         std::cout << "For the number of stages and RAM currently given, the maximum precision can be: " << calcMaxPrecUp(precision, rocket.stages.size(), maxRAM, nCombinations) << "\n\n";
+        std::cout << "\nPress Enter to end programm";
+        getchar();
         return -1;
     }
     else {
