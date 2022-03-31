@@ -2,7 +2,7 @@
 
 Calculate optimal mass for each stage given a deltaV requirement on a multistage rocket.
 
-Finds the lowest total mass for a rocket by optimizing the weight distribution between all stages, without altering deltaV.
+Finds the lowest total mass for a rocket by optimizing the weight distribution between all stages, without altering total deltaV.
 
 Rocket and engines are specified in a json.\
 Sample files for each are in the config folder.
