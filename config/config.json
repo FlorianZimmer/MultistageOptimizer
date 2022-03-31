@@ -1,8 +1,8 @@
 {
   "useMultiCore": true,
-  "precision": 58,
+  "precision": 100,
   "maxRAM": 17179869184,
   "verbose": false,
   "enginesPath": "config/engines.json",
-  "rocketPath": "config/rocket.json"
+  "rocketPath": "config/rocket_3stage.json"
 }

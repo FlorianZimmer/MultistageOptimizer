@@ -3,8 +3,8 @@ Filename: MultistageOptimizer.cpp
 Description : Calculate optimal mass for each stage given a DeltaV requirement on a multistage Rocket
 Source of math equations : http://www.projectrho.com/public_html/rocket/multistage.php
 Author: Florian Zimmer
-Version : 0.7
-Last Changed : 27.03.2021
+Version : 0.8
+Last Changed : 31.03.2021
 Changelog :
 0.1 basic functionality/port from python project
 0.2 debugging
@@ -13,6 +13,7 @@ Changelog :
 0.5 fix Perfomance Issues and Multithreading
 0.6 split files
 0.7 added config
+0.8 added icon
 */
 
 #include <iostream>
@@ -76,7 +77,7 @@ int main()
         return -1;
     }
     else {
-        std::cout << "For the number of stages currently given, the maximum precision can be raised to: " << calcMaxPrecDown(255, rocket.stages.size(), maxRAM, nCombinations) << "\n\n";
+        std::cout << "For the number of stages and RAM currently given, the maximum precision can be raised to: " << calcMaxPrecDown(255, rocket.stages.size(), maxRAM, nCombinations) << "\n\n";
 
         std::cout << "# Combinations: " << nCombinations << "\n\n";
 

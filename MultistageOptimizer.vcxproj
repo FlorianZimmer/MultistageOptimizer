@@ -154,8 +154,8 @@
     <ClCompile Include="MultistageOptimizer.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="config\config.json" />
     <None Include="config\engines.json" />
-    <None Include="config\rocket.json" />
     <None Include="config\rocket_3stage.json" />
     <None Include="config\rocket_4stage.json" />
     <None Include="config\rocket_8stage.json" />
