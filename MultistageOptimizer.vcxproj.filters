@@ -42,6 +42,9 @@
     <ClInclude Include="rocket_definition\Stage.hpp">
       <Filter>Headerdateien</Filter>
     </ClInclude>
+    <ClInclude Include="resource2.h">
+      <Filter>Headerdateien</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="MultistageOptimizer.cpp">
@@ -64,5 +67,15 @@
     <None Include="config\rocket_8stage.json">
       <Filter>Ressourcendateien</Filter>
     </None>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="MultistageOptimizer.rc">
+      <Filter>Ressourcendateien</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="Jeb.ico">
+      <Filter>Ressourcendateien</Filter>
+    </Image>
   </ItemGroup>
 </Project>
