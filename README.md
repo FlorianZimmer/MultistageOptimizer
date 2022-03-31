@@ -7,6 +7,9 @@ Finds the lowest total mass for a rocket by optimizing the weight distribution b
 Rocket and engines are specified in a json.\
 Sample files for each are in the config folder.
 
+Mathematical background, which was also the source for this project can be found here:\
+http://www.projectrho.com/public_html/rocket/multistage.php
+
 ## Config
 
 Options can be found in config/config.json.
