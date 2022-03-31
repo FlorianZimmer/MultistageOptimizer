@@ -27,3 +27,9 @@ verbose 			-> should only be used for debugging, as it slows down the programm a
 enginesPath 	-> path to json where engines are defined.
   
 rocketPath		-> path to json where rocket is defined.
+
+## Limitations
+
+Upwards of six stages we get into realms of impossible amount of necessary RAM, with higher precisions, as the number of different distributions is calculated with n choose r where n is the precision - 1 and r is the number of stages - 1.\
+To mitigate the effect, you can lower the precision.
+You can try out what what number of distributions exist here: https://www.calculatorsoup.com/calculators/discretemathematics/combinations.php
