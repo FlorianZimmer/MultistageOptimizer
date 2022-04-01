@@ -36,3 +36,13 @@ rocketPath		-> path to json where rocket is defined.
 Upwards of six stages we get into realms of impossible amount of necessary RAM, with higher precisions, as the number of different distributions is calculated with n choose r where n is the precision - 1 and r is the number of stages - 1.\
 To mitigate the effect, you can lower the precision.
 You can try out what what number of distributions exist here: https://www.calculatorsoup.com/calculators/discretemathematics/combinations.php
+
+Currently the program assumes that the engines always work at their vaccuum efficiency.
+I tried using the sl isp of engines for the first stage only. But that always leads to a tiny first stage, because it is so "inefficient" and therefore shouldnt be very big according to the program. Because of that, the first stage engine burns for only a very short time, causing the second stage to also burn near the surface.
+
+## KSP Mods
+
+For using this easily and read out all necessary information in KSP, one should use:
+- Kerbal Engineer Redux -> read out total mass and deltaV
+- Real Fuels -> dry and wet mass of tank
+- Procedural Parts -> easily and very finely adjust the size of tanks
