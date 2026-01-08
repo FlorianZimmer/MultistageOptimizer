@@ -24,7 +24,7 @@ jobs:
         run: |
           $count = git rev-list --count HEAD
           $sha = git rev-parse --short=8 HEAD
-          $tag = "b$count"
+          $tag = ('b{0:D5}' -f [int]$count)
           "count=$count" >> $env:GITHUB_OUTPUT
           "sha=$sha" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT

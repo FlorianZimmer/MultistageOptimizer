@@ -3,7 +3,7 @@ Filename: MultistageOptimizer.cpp
 Description : Calculate optimal mass for each stage given a DeltaV requirement on a multistage Rocket
 Source of math equations : http://www.projectrho.com/public_html/rocket/multistage.php
 Author: Florian Zimmer
-Version : rolling (see GitHub prereleases: b<commit-count>)
+Version : rolling (see GitHub releases: b<commit-count> padded to 5 digits)
 Last Changed : 31.03.2021
 Legacy changelog (pre-continuous releases):
 0.1 basic functionality/port from python project

@@ -124,10 +124,10 @@ Benchmark runs also append a CSV row to `benchmark_results.csv` (override with `
 
 ## Releases (continuous builds)
 
-GitHub Actions publishes rolling prereleases for every commit to `main`/`master`:
+GitHub Actions publishes rolling releases for every commit to `main`/`master`:
 
-- Tag format: `b<commit-count>` (for example `b123`).
-- Assets: `MultistageOptimizer-windows-x64-b<commit-count>.zip` containing `MultistageOptimizer.exe` + sample `config/`.
+- Tag format: `b<commit-count>` zero-padded to 5 digits (for example `b00123`).
+- Assets: `MultistageOptimizer-windows-x64-b00123.zip` containing `MultistageOptimizer.exe` + sample `config/`.
 
 ## Limitations
 
