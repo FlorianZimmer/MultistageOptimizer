@@ -62,6 +62,7 @@ jobs:
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: MultistageOptimizer ${{ steps.ver.outputs.tag }}
-          prerelease: true
+          prerelease: false
+          make_latest: true
           generate_release_notes: true
           files: ${{ steps.pkg.outputs.zip }}
