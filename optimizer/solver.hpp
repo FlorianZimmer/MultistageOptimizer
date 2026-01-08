@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <limits>
 #include <thread>
 #include <utility>
@@ -41,200 +42,10 @@ struct FullGridResult {
     SolveTimings timings;
 };
 
-inline bool betterCandidate(double lhs_mass,
-                            const std::vector<unsigned char>& lhs_units,
-                            double rhs_mass,
-                            const std::vector<unsigned char>& rhs_units,
-                            double rel_eps = 1e-12)
-{
-    if (lhs_mass < rhs_mass) {
-        return true;
-    }
-    if (!std::isfinite(lhs_mass) || !std::isfinite(rhs_mass)) {
-        return false;
-    }
-    double diff = std::fabs(lhs_mass - rhs_mass);
-    double scale = std::max(1.0, std::max(std::fabs(lhs_mass), std::fabs(rhs_mass)));
-    if (diff > rel_eps * scale) {
-        return false;
-    }
-    return lhs_units < rhs_units;
-}
-
-inline FullGridResult solveFullGrid(const Rocket& rocket,
-                                   int precision,
-                                   bool verbose,
-                                   int threads,
-                                   std::size_t keep_top_k = 1)
-{
-    FullGridResult result;
-
-    using Clock = std::chrono::steady_clock;
-    auto elapsedSeconds = [](Clock::time_point start, Clock::time_point end) {
-        return std::chrono::duration<double>(end - start).count();
-    };
-
-    const std::size_t stages = rocket.stages.size();
-    if (stages == 0) {
-        return result;
-    }
-    if (precision <= 0 || precision > 255) {
-        return result;
-    }
-
-    const std::uint64_t nCombinations = nCr(precision - 1, static_cast<int>(stages) - 1);
-    result.combinations = nCombinations;
-    if (nCombinations == 0) {
-        return result;
-    }
-
-    if (threads < 1) {
-        threads = 1;
-    }
-    if (static_cast<std::uint64_t>(threads) > nCombinations) {
-        threads = static_cast<int>(nCombinations);
-        if (threads < 1) {
-            threads = 1;
-        }
-    }
-
-    std::vector<unsigned char> distributions(static_cast<std::size_t>(nCombinations) * stages, 0);
-    std::vector<double> masses(static_cast<std::size_t>(nCombinations), 0.0);
-
-    auto fill_start = Clock::now();
-    std::fill(distributions.begin(), distributions.end(), static_cast<unsigned char>(1));
-    auto fill_end = Clock::now();
-
-    auto tuple_start = Clock::now();
-    std::uint64_t generated = createTuple(distributions.data(), stages, nCombinations, precision);
-    auto tuple_end = Clock::now();
-    if (generated != nCombinations) {
-        return result;
-    }
-
-    if (verbose) {
-        if (!validateDistributions(distributions.data(), stages, nCombinations, precision, 100000)) {
-            return result;
-        }
-    }
-
-    auto mass_start = Clock::now();
-    if (threads == 1) {
-        distMass(verbose, 0, nCombinations, nCombinations, rocket, masses.data(), distributions.data(), precision);
-    }
-    else {
-        std::uint64_t threadBlock = nCombinations / static_cast<std::uint64_t>(threads);
-        std::vector<std::thread> pool;
-        pool.reserve(static_cast<std::size_t>(threads));
-        for (int t = 0; t < threads; t++) {
-            std::uint64_t begin = static_cast<std::uint64_t>(t) * threadBlock;
-            std::uint64_t end = (t == threads - 1) ? nCombinations : begin + threadBlock;
-            pool.push_back(std::thread([verbose, begin, end, nCombinations, &rocket, &masses, &distributions, precision] {
-    distMass(verbose, begin, end, nCombinations, rocket, masses.data(), distributions.data(), precision);
-    }));
-        }
-        for (auto& th : pool) {
-            th.join();
-        }
-    }
-    auto mass_end = Clock::now();
-
-    auto min_start = Clock::now();
-    if (keep_top_k < 1) {
-        keep_top_k = 1;
-    }
-
-    struct IndexCandidate {
-        double mass = std::numeric_limits<double>::infinity();
-        std::uint64_t index = 0;
-    };
-    auto lessByMassIndex = [](const IndexCandidate& left, const IndexCandidate& right) {
-        if (left.mass != right.mass) {
-            return left.mass < right.mass;
-        }
-        return left.index < right.index;
-    };
-
-    std::vector<IndexCandidate> top;
-    top.reserve(keep_top_k);
-
-    if (keep_top_k == 1) {
-        IndexCandidate best;
-        bool has = false;
-        for (std::uint64_t i = 0; i < nCombinations; i++) {
-            double mass = masses[static_cast<std::size_t>(i)];
-            if (!std::isfinite(mass)) {
-                continue;
-            }
-            if (!has || mass < best.mass || (mass == best.mass && i < best.index)) {
-                best.mass = mass;
-                best.index = i;
-                has = true;
-            }
-        }
-        if (has) {
-            top.push_back(best);
-        }
-    }
-    else {
-        for (std::uint64_t i = 0; i < nCombinations; i++) {
-            double mass = masses[static_cast<std::size_t>(i)];
-            if (!std::isfinite(mass)) {
-                continue;
-            }
-            IndexCandidate candidate;
-            candidate.mass = mass;
-            candidate.index = i;
-
-            if (top.size() < keep_top_k) {
-                auto pos = std::lower_bound(top.begin(), top.end(), candidate, lessByMassIndex);
-                top.insert(pos, candidate);
-                continue;
-            }
-
-            if (top.empty()) {
-                top.push_back(candidate);
-                continue;
-            }
-
-            if (lessByMassIndex(candidate, top.back())) {
-                auto pos = std::lower_bound(top.begin(), top.end(), candidate, lessByMassIndex);
-                top.insert(pos, candidate);
-                if (top.size() > keep_top_k) {
-                    top.pop_back();
-                }
-            }
-        }
-    }
-
-    result.best_k.clear();
-    result.best_k.reserve(top.size());
-    for (const auto& entry : top) {
-        Candidate c;
-        c.mass = entry.mass;
-        c.index = entry.index;
-        c.units.assign(stages, 0);
-        for (std::size_t j = 0; j < stages; j++) {
-            c.units[j] = distributions[j * nCombinations + entry.index];
-        }
-        result.best_k.push_back(std::move(c));
-    }
-
-    if (!result.best_k.empty()) {
-        result.best_mass = result.best_k.front().mass;
-        result.best_index = result.best_k.front().index;
-        result.best_units = result.best_k.front().units;
-    }
-
-    auto min_end = Clock::now();
-
-    result.timings.fill_seconds = elapsedSeconds(fill_start, fill_end);
-    result.timings.tuple_seconds = elapsedSeconds(tuple_start, tuple_end);
-    result.timings.mass_seconds = elapsedSeconds(mass_start, mass_end);
-    result.timings.min_seconds = elapsedSeconds(min_start, min_end);
-
-    return result;
-}
+enum class FullGridMode {
+    Materialize,
+    Streaming,
+};
 
 struct RocketEvalTables {
     int precision = 0;
@@ -303,6 +114,44 @@ inline RocketEvalTables buildRocketEvalTables(const Rocket& rocket, int precisio
     return out;
 }
 
+inline double evaluateDistributionMass(const Rocket& rocket, const RocketEvalTables& tables, const unsigned char* dv_units)
+{
+    constexpr double inf = std::numeric_limits<double>::infinity();
+    if (!tables.valid || dv_units == nullptr) {
+        return inf;
+    }
+
+    const std::size_t stages = rocket.stages.size();
+    double current = inf;
+    for (std::size_t j = 0; j < stages; j++) {
+        unsigned int units = dv_units[j];
+        if (units < 1 || units > static_cast<unsigned int>(tables.precision)) {
+            return inf;
+        }
+        double ratio = tables.ratio_tables[j][units];
+        if (j == 0) {
+            current = calcMassFromRatio(rocket.stages[j].payload,
+                                        tables.inert_mass_fract[j],
+                                        tables.one_minus_inert_fract[j],
+                                        tables.inert_coeff[j],
+                                        ratio,
+                                        tables.inert_mass_rest[j]);
+        }
+        else {
+            current = calcMassFromRatio(current,
+                                        tables.inert_mass_fract[j],
+                                        tables.one_minus_inert_fract[j],
+                                        tables.inert_coeff[j],
+                                        ratio,
+                                        tables.inert_mass_rest[j]);
+        }
+        if (!std::isfinite(current)) {
+            return inf;
+        }
+    }
+    return current;
+}
+
 inline double evaluateDistributionMass(const Rocket& rocket, const RocketEvalTables& tables, const int* dv_units)
 {
     constexpr double inf = std::numeric_limits<double>::infinity();
@@ -339,6 +188,590 @@ inline double evaluateDistributionMass(const Rocket& rocket, const RocketEvalTab
         }
     }
     return current;
+}
+
+inline bool betterCandidate(double lhs_mass,
+                            const std::vector<unsigned char>& lhs_units,
+                            double rhs_mass,
+                            const std::vector<unsigned char>& rhs_units,
+                            double rel_eps = 1e-12)
+{
+    if (lhs_mass < rhs_mass) {
+        return true;
+    }
+    if (!std::isfinite(lhs_mass) || !std::isfinite(rhs_mass)) {
+        return false;
+    }
+    double diff = std::fabs(lhs_mass - rhs_mass);
+    double scale = std::max(1.0, std::max(std::fabs(lhs_mass), std::fabs(rhs_mass)));
+    if (diff > rel_eps * scale) {
+        return false;
+    }
+    return lhs_units < rhs_units;
+}
+
+inline FullGridResult solveFullGridStreaming(const Rocket& rocket,
+                                            int precision,
+                                            bool verbose,
+                                            int threads,
+                                            std::size_t keep_top_k = 1)
+{
+    FullGridResult result;
+
+    using Clock = std::chrono::steady_clock;
+    auto elapsedSeconds = [](Clock::time_point start, Clock::time_point end) {
+        return std::chrono::duration<double>(end - start).count();
+    };
+
+    const std::size_t stages = rocket.stages.size();
+    if (stages == 0) {
+        return result;
+    }
+    if (precision <= 0 || precision > 255) {
+        return result;
+    }
+
+    const std::uint64_t nCombinations = nCr(precision - 1, static_cast<int>(stages) - 1);
+    result.combinations = nCombinations;
+    if (nCombinations == 0) {
+        return result;
+    }
+
+    if (threads < 1) {
+        threads = 1;
+    }
+    if (static_cast<std::uint64_t>(threads) > nCombinations) {
+        threads = static_cast<int>(nCombinations);
+        if (threads < 1) {
+            threads = 1;
+        }
+    }
+
+    auto mass_start = Clock::now();
+    RocketEvalTables tables = buildRocketEvalTables(rocket, precision);
+    if (!tables.valid) {
+        return result;
+    }
+
+    if (keep_top_k < 1) {
+        keep_top_k = 1;
+    }
+
+    auto lessByMassIndex = [](const Candidate& left, const Candidate& right) {
+        if (left.mass != right.mass) {
+            return left.mass < right.mass;
+        }
+        return left.index < right.index;
+    };
+    auto betterByMassIndex = [](double mass, std::uint64_t index, const Candidate& other) {
+        if (mass != other.mass) {
+            return mass < other.mass;
+        }
+        return index < other.index;
+    };
+
+    if (stages == 1) {
+        Candidate c;
+        c.index = 0;
+        c.units.assign(1, static_cast<unsigned char>(precision));
+        c.mass = calcMassFromRatio(rocket.stages[0].payload,
+                                   tables.inert_mass_fract[0],
+                                   tables.one_minus_inert_fract[0],
+                                   tables.inert_coeff[0],
+                                   tables.ratio_tables[0][static_cast<std::size_t>(precision)],
+                                   tables.inert_mass_rest[0]);
+        if (!std::isfinite(c.mass)) {
+            return result;
+        }
+        result.best_k.clear();
+        result.best_k.push_back(c);
+        result.best_mass = c.mass;
+        result.best_index = c.index;
+        result.best_units = c.units;
+        result.timings.fill_seconds = 0.0;
+        result.timings.tuple_seconds = 0.0;
+        result.timings.mass_seconds = 0.0;
+        result.timings.min_seconds = 0.0;
+        return result;
+    }
+
+    const int max_first = precision - static_cast<int>(stages) + 1;
+    if (max_first < 1) {
+        return result;
+    }
+
+    std::vector<std::uint64_t> prefix(static_cast<std::size_t>(max_first) + 2, 0);
+    std::vector<std::uint64_t> count_per_first(static_cast<std::size_t>(max_first) + 1, 0);
+    std::uint64_t running = 0;
+    const int rest_stages = static_cast<int>(stages) - 1;
+    for (int u0 = 1; u0 <= max_first; u0++) {
+        prefix[static_cast<std::size_t>(u0)] = running;
+        int rest_sum = precision - u0;
+        std::uint64_t count = 0;
+        if (rest_stages == 1) {
+            count = 1;
+        }
+        else {
+            unsigned long long count_ull = nCr(rest_sum - 1, rest_stages - 1);
+            count = (count_ull == ULLONG_MAX) ? std::numeric_limits<std::uint64_t>::max() : static_cast<std::uint64_t>(count_ull);
+        }
+        count_per_first[static_cast<std::size_t>(u0)] = count;
+        running = safeAdd_ULLONG(running, count);
+    }
+
+    if (threads > max_first) {
+        threads = max_first;
+    }
+    if (threads < 1) {
+        threads = 1;
+    }
+
+    struct FirstRange {
+        int begin = 1;
+        int end = 1; // exclusive
+    };
+
+    std::vector<FirstRange> ranges;
+    ranges.reserve(static_cast<std::size_t>(threads));
+
+    std::uint64_t target = nCombinations / static_cast<std::uint64_t>(threads);
+    if (target == 0) {
+        target = 1;
+    }
+
+    int current_begin = 1;
+    std::uint64_t bucket = 0;
+    for (int u0 = 1; u0 <= max_first; u0++) {
+        std::uint64_t c = count_per_first[static_cast<std::size_t>(u0)];
+        if (ranges.size() + 1 < static_cast<std::size_t>(threads) && bucket > 0 && bucket + c > target) {
+            ranges.push_back(FirstRange{current_begin, u0});
+            current_begin = u0;
+            bucket = 0;
+        }
+        bucket = safeAdd_ULLONG(bucket, c);
+    }
+    ranges.push_back(FirstRange{current_begin, max_first + 1});
+
+    std::vector<std::vector<Candidate>> top_per_thread(ranges.size());
+
+    auto maybe_insert = [&](std::vector<Candidate>& top, double mass, std::uint64_t index, const unsigned char* units) {
+        if (!std::isfinite(mass)) {
+            return;
+        }
+        if (top.size() >= keep_top_k && !betterByMassIndex(mass, index, top.back())) {
+            return;
+        }
+        Candidate candidate;
+        candidate.mass = mass;
+        candidate.index = index;
+        candidate.units.assign(stages, 0);
+        for (std::size_t i = 0; i < stages; i++) {
+            candidate.units[i] = units[i];
+        }
+        auto pos = std::lower_bound(top.begin(), top.end(), candidate, lessByMassIndex);
+        top.insert(pos, std::move(candidate));
+        if (top.size() > keep_top_k) {
+            top.pop_back();
+        }
+    };
+
+    auto worker = [&](std::size_t slot, int u0_begin, int u0_end, bool do_verbose) {
+        constexpr double inf = std::numeric_limits<double>::infinity();
+        auto& local_top = top_per_thread[slot];
+        local_top.clear();
+        local_top.reserve(keep_top_k);
+
+        std::vector<unsigned char> units_u8;
+        if (do_verbose) {
+            units_u8.assign(stages, 0);
+        }
+        double verbose_min = inf;
+
+        std::vector<int> minUnits(static_cast<std::size_t>(rest_stages), 1);
+        std::vector<int> maxUnits(static_cast<std::size_t>(rest_stages), 1);
+
+        for (int u0 = u0_begin; u0 < u0_end; u0++) {
+            int rest_sum = precision - u0;
+            std::uint64_t index_base = prefix[static_cast<std::size_t>(u0)];
+
+            unsigned char u0_u8 = static_cast<unsigned char>(u0);
+            double current0 = calcMassFromRatio(rocket.stages[0].payload,
+                                                tables.inert_mass_fract[0],
+                                                tables.one_minus_inert_fract[0],
+                                                tables.inert_coeff[0],
+                                                tables.ratio_tables[0][u0_u8],
+                                                tables.inert_mass_rest[0]);
+            if (!std::isfinite(current0)) {
+                continue;
+            }
+
+            if (rest_stages == 1) {
+                int u1 = rest_sum;
+                unsigned char u1_u8 = static_cast<unsigned char>(u1);
+                double current = calcMassFromRatio(current0,
+                                                  tables.inert_mass_fract[1],
+                                                  tables.one_minus_inert_fract[1],
+                                                  tables.inert_coeff[1],
+                                                  tables.ratio_tables[1][u1_u8],
+                                                  tables.inert_mass_rest[1]);
+                if (!std::isfinite(current)) {
+                    continue;
+                }
+
+                if (do_verbose) {
+                    units_u8[0] = u0_u8;
+                    units_u8[1] = u1_u8;
+                    if (current < verbose_min) {
+                        verbose_min = current;
+                        std::cout << "Distribution number: " << index_base << "\t" << current << "\n";
+                        for (std::size_t j = 0; j < stages; j++) {
+                            std::cout << "Stage " << stages - j << ": " << static_cast<int>(units_u8[j]) << "\t";
+                        }
+                        std::cout << "\n\n";
+                    }
+                }
+
+                unsigned char scratch[2] = {u0_u8, u1_u8};
+                maybe_insert(local_top, current, index_base, scratch);
+                continue;
+            }
+
+            int global_max = rest_sum - (rest_stages - 1);
+            maxUnits.assign(static_cast<std::size_t>(rest_stages), global_max);
+
+            std::uint64_t local = 0;
+            enumerateBoundedCompositions(minUnits, maxUnits, rest_sum, [&](const std::vector<int>& rest) {
+                std::uint64_t index = index_base + local;
+                local++;
+
+                double current = current0;
+                for (int s = 1; s < static_cast<int>(stages); s++) {
+                    int u = rest[static_cast<std::size_t>(s - 1)];
+                    unsigned char u_u8 = static_cast<unsigned char>(u);
+                    double ratio = tables.ratio_tables[static_cast<std::size_t>(s)][u_u8];
+                    current = calcMassFromRatio(current,
+                                                tables.inert_mass_fract[static_cast<std::size_t>(s)],
+                                                tables.one_minus_inert_fract[static_cast<std::size_t>(s)],
+                                                tables.inert_coeff[static_cast<std::size_t>(s)],
+                                                ratio,
+                                                tables.inert_mass_rest[static_cast<std::size_t>(s)]);
+                    if (!std::isfinite(current)) {
+                        return;
+                    }
+                    if (do_verbose) {
+                        units_u8[static_cast<std::size_t>(s)] = u_u8;
+                    }
+                }
+
+                if (do_verbose) {
+                    units_u8[0] = u0_u8;
+                    if (current < verbose_min) {
+                        verbose_min = current;
+                        std::cout << "Distribution number: " << index << "\t" << current << "\n";
+                        for (std::size_t j = 0; j < stages; j++) {
+                            std::cout << "Stage " << stages - j << ": " << static_cast<int>(units_u8[j]) << "\t";
+                        }
+                        std::cout << "\n\n";
+                    }
+                }
+
+                if (local_top.size() >= keep_top_k && !betterByMassIndex(current, index, local_top.back())) {
+                    return;
+                }
+
+                std::vector<unsigned char> scratch_units;
+                scratch_units.assign(stages, 0);
+                scratch_units[0] = u0_u8;
+                for (int s = 1; s < static_cast<int>(stages); s++) {
+                    scratch_units[static_cast<std::size_t>(s)] = static_cast<unsigned char>(rest[static_cast<std::size_t>(s - 1)]);
+                }
+                maybe_insert(local_top, current, index, scratch_units.data());
+            });
+        }
+    };
+
+    if (ranges.size() == 1) {
+        worker(0, ranges[0].begin, ranges[0].end, verbose);
+    }
+    else {
+        std::vector<std::thread> pool;
+        pool.reserve(ranges.size());
+        for (std::size_t t = 0; t < ranges.size(); t++) {
+            pool.push_back(std::thread([&, t] {
+                worker(t, ranges[t].begin, ranges[t].end, false);
+            }));
+        }
+        for (auto& th : pool) {
+            th.join();
+        }
+    }
+    auto mass_end = Clock::now();
+
+    auto min_start = Clock::now();
+    std::vector<Candidate> top;
+    top.reserve(std::min<std::size_t>(keep_top_k * top_per_thread.size(), static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    for (const auto& local : top_per_thread) {
+        for (const auto& entry : local) {
+            top.push_back(entry);
+        }
+    }
+    std::sort(top.begin(), top.end(), lessByMassIndex);
+    if (top.size() > keep_top_k) {
+        top.resize(keep_top_k);
+    }
+
+    result.best_k = top;
+
+    if (!result.best_k.empty()) {
+        result.best_mass = result.best_k.front().mass;
+        result.best_index = result.best_k.front().index;
+        result.best_units = result.best_k.front().units;
+    }
+
+    auto min_end = Clock::now();
+
+    result.timings.fill_seconds = 0.0;
+    result.timings.tuple_seconds = 0.0;
+    result.timings.mass_seconds = elapsedSeconds(mass_start, mass_end);
+    result.timings.min_seconds = elapsedSeconds(min_start, min_end);
+
+    return result;
+}
+
+inline FullGridResult solveFullGridMaterialized(const Rocket& rocket,
+                                               int precision,
+                                               bool verbose,
+                                               int threads,
+                                               std::size_t keep_top_k = 1)
+{
+    FullGridResult result;
+
+    using Clock = std::chrono::steady_clock;
+    auto elapsedSeconds = [](Clock::time_point start, Clock::time_point end) {
+        return std::chrono::duration<double>(end - start).count();
+    };
+
+    const std::size_t stages = rocket.stages.size();
+    if (stages == 0) {
+        return result;
+    }
+    if (precision <= 0 || precision > 255) {
+        return result;
+    }
+
+    const std::uint64_t nCombinations = nCr(precision - 1, static_cast<int>(stages) - 1);
+    result.combinations = nCombinations;
+    if (nCombinations == 0) {
+        return result;
+    }
+
+    if (threads < 1) {
+        threads = 1;
+    }
+    if (static_cast<std::uint64_t>(threads) > nCombinations) {
+        threads = static_cast<int>(nCombinations);
+        if (threads < 1) {
+            threads = 1;
+        }
+    }
+
+    if (keep_top_k < 1) {
+        keep_top_k = 1;
+    }
+
+    std::vector<unsigned char> distributions(static_cast<std::size_t>(nCombinations) * stages, 0);
+
+    auto fill_start = Clock::now();
+    std::fill(distributions.begin(), distributions.end(), static_cast<unsigned char>(1));
+    auto fill_end = Clock::now();
+
+    auto tuple_start = Clock::now();
+    std::uint64_t generated = createTuple(distributions.data(), stages, nCombinations, precision);
+    auto tuple_end = Clock::now();
+    if (generated != nCombinations) {
+        return result;
+    }
+
+    if (verbose) {
+        if (!validateDistributions(distributions.data(), stages, nCombinations, precision, 100000)) {
+            return result;
+        }
+    }
+
+    auto mass_start = Clock::now();
+    RocketEvalTables tables = buildRocketEvalTables(rocket, precision);
+    if (!tables.valid) {
+        return result;
+    }
+
+    struct IndexCandidate {
+        double mass = std::numeric_limits<double>::infinity();
+        std::uint64_t index = 0;
+    };
+    auto lessByMassIndex = [](const IndexCandidate& left, const IndexCandidate& right) {
+        if (left.mass != right.mass) {
+            return left.mass < right.mass;
+        }
+        return left.index < right.index;
+    };
+
+    std::vector<std::vector<IndexCandidate>> top_per_thread(static_cast<std::size_t>(threads));
+
+    auto scan_range = [&](std::uint64_t begin, std::uint64_t end, std::vector<IndexCandidate>& top, bool do_verbose) {
+        constexpr double inf = std::numeric_limits<double>::infinity();
+        top.clear();
+        top.reserve(keep_top_k);
+
+        std::vector<unsigned char> dv_units;
+        if (do_verbose) {
+            dv_units.assign(stages, 0);
+        }
+        double verbose_min = inf;
+
+        for (std::uint64_t i = begin; i < end; i++) {
+            double current = inf;
+            for (std::size_t j = 0; j < stages; j++) {
+                unsigned char units = distributions[j * nCombinations + i];
+                if (units < 1 || units > static_cast<unsigned char>(precision)) {
+                    current = inf;
+                    break;
+                }
+                if (do_verbose) {
+                    dv_units[j] = units;
+                }
+                double ratio = tables.ratio_tables[j][units];
+                if (j == 0) {
+                    current = calcMassFromRatio(rocket.stages[0].payload,
+                                                tables.inert_mass_fract[0],
+                                                tables.one_minus_inert_fract[0],
+                                                tables.inert_coeff[0],
+                                                ratio,
+                                                tables.inert_mass_rest[0]);
+                }
+                else {
+                    current = calcMassFromRatio(current,
+                                                tables.inert_mass_fract[j],
+                                                tables.one_minus_inert_fract[j],
+                                                tables.inert_coeff[j],
+                                                ratio,
+                                                tables.inert_mass_rest[j]);
+                }
+                if (!std::isfinite(current)) {
+                    current = inf;
+                    break;
+                }
+            }
+            if (!std::isfinite(current)) {
+                continue;
+            }
+
+            if (do_verbose && current < verbose_min) {
+                verbose_min = current;
+                std::cout << "Distribution number: " << i << "\t" << current << "\n";
+                for (std::size_t j = 0; j < stages; j++) {
+                    std::cout << "Stage " << stages - j << ": " << static_cast<int>(dv_units[j]) << "\t";
+                }
+                std::cout << "\n\n";
+            }
+
+            IndexCandidate candidate;
+            candidate.mass = current;
+            candidate.index = i;
+
+            if (top.size() < keep_top_k) {
+                auto pos = std::lower_bound(top.begin(), top.end(), candidate, lessByMassIndex);
+                top.insert(pos, candidate);
+                continue;
+            }
+
+            if (top.empty()) {
+                top.push_back(candidate);
+                continue;
+            }
+
+            if (lessByMassIndex(candidate, top.back())) {
+                auto pos = std::lower_bound(top.begin(), top.end(), candidate, lessByMassIndex);
+                top.insert(pos, candidate);
+                if (top.size() > keep_top_k) {
+                    top.pop_back();
+                }
+            }
+        }
+    };
+
+    if (threads == 1) {
+        scan_range(0, nCombinations, top_per_thread[0], verbose);
+    }
+    else {
+        std::uint64_t threadBlock = nCombinations / static_cast<std::uint64_t>(threads);
+        std::vector<std::thread> pool;
+        pool.reserve(static_cast<std::size_t>(threads));
+        for (int t = 0; t < threads; t++) {
+            std::uint64_t begin = static_cast<std::uint64_t>(t) * threadBlock;
+            std::uint64_t end = (t == threads - 1) ? nCombinations : begin + threadBlock;
+            pool.push_back(std::thread([&, t, begin, end] {
+                scan_range(begin, end, top_per_thread[static_cast<std::size_t>(t)], false);
+            }));
+        }
+        for (auto& th : pool) {
+            th.join();
+        }
+    }
+    auto mass_end = Clock::now();
+
+    auto min_start = Clock::now();
+    std::vector<IndexCandidate> top;
+    top.reserve(std::min<std::size_t>(keep_top_k * static_cast<std::size_t>(threads), static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    for (const auto& local : top_per_thread) {
+        for (const auto& entry : local) {
+            top.push_back(entry);
+        }
+    }
+    std::sort(top.begin(), top.end(), lessByMassIndex);
+    if (top.size() > keep_top_k) {
+        top.resize(keep_top_k);
+    }
+
+    result.best_k.clear();
+    result.best_k.reserve(top.size());
+    for (const auto& entry : top) {
+        Candidate c;
+        c.mass = entry.mass;
+        c.index = entry.index;
+        c.units.assign(stages, 0);
+        for (std::size_t j = 0; j < stages; j++) {
+            c.units[j] = distributions[j * nCombinations + entry.index];
+        }
+        result.best_k.push_back(std::move(c));
+    }
+
+    if (!result.best_k.empty()) {
+        result.best_mass = result.best_k.front().mass;
+        result.best_index = result.best_k.front().index;
+        result.best_units = result.best_k.front().units;
+    }
+
+    auto min_end = Clock::now();
+
+    result.timings.fill_seconds = elapsedSeconds(fill_start, fill_end);
+    result.timings.tuple_seconds = elapsedSeconds(tuple_start, tuple_end);
+    result.timings.mass_seconds = elapsedSeconds(mass_start, mass_end);
+    result.timings.min_seconds = elapsedSeconds(min_start, min_end);
+
+    return result;
+}
+
+inline FullGridResult solveFullGrid(const Rocket& rocket,
+                                   int precision,
+                                   bool verbose,
+                                   int threads,
+                                   std::size_t keep_top_k = 1,
+                                   FullGridMode mode = FullGridMode::Materialize)
+{
+    if (mode == FullGridMode::Streaming) {
+        return solveFullGridStreaming(rocket, precision, verbose, threads, keep_top_k);
+    }
+    return solveFullGridMaterialized(rocket, precision, verbose, threads, keep_top_k);
 }
 
 struct RefineResult {
@@ -426,6 +859,7 @@ struct ZoomOptions {
     int window_coarse_steps = 0;
     std::size_t top_k = 1;
     int threads = 1;
+    FullGridMode full_grid_mode = FullGridMode::Materialize;
     bool verbose = false;
     std::uint64_t max_evaluations = std::numeric_limits<std::uint64_t>::max();
 };
@@ -479,7 +913,7 @@ inline ZoomResult solveZoom(const Rocket& rocket, const ZoomOptions& options)
         top_k = 1;
     }
 
-    FullGridResult coarse_result = solveFullGrid(rocket, coarse, options.verbose, options.threads, top_k);
+    FullGridResult coarse_result = solveFullGrid(rocket, coarse, options.verbose, options.threads, top_k, options.full_grid_mode);
     out.coarse_evaluated = coarse_result.combinations;
     out.coarse_best_units = coarse_result.best_units;
     out.coarse_timings = coarse_result.timings;

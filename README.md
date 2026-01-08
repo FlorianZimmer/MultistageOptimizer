@@ -15,6 +15,7 @@ http://www.projectrho.com/public_html/rocket/multistage.php
 Options can be found in config/config.json.
 
 - `useMultiCore`: if program should utilize all available cores.
+- `fullGridMode`: how the full-grid solver iterates distributions: `materialize` (default) or `streaming` (generate on the fly, avoids a giant `distributions` table; useful groundwork for GPU work but can be slower on CPU).
 - `precision`: the number of discretization steps used to split total deltaV across stages (1..255).
   - Example (2 stages, precision 150): stage split candidates include `1/150` + `149/150`, `2/150` + `148/150`, ...
 - `maxRAM`: maximum allowed RAM usage in bytes. Supports human-readable values like `16GB` (base 1024).
@@ -114,11 +115,30 @@ If the baseline `full_grid` fails (usually due to RAM), comparisons are omitted 
 Use `--benchmark-max-seconds <sec>` to fail the run if the average total time exceeds the limit (this is what CI uses).
 Benchmark runs also append a CSV row to `benchmark_results.csv` (override with `--benchmark-csv <path>`).
 
+## Build
+
+- Visual Studio: open `MultistageOptimizer.sln` and build.
+- clang++ (quick build, no IDE):
+  - `clang++ -std=c++17 -O2 -DNDEBUG -I. MultistageOptimizer.cpp -o MultistageOptimizer.exe`
+  - tests: `clang++ -std=c++17 -O2 -DNDEBUG -I. -Itests tests/*.cpp -o MultistageOptimizerTests.exe`
+
 ## Limitations
 
 Upwards of six stages we get into realms of impossible amount of necessary RAM, with higher precisions, as the number of different distributions is calculated with n choose r where n is the precision - 1 and r is the number of stages - 1.\
 To mitigate the effect, you can lower the precision.
 You can try out what what number of distributions exist here: https://www.calculatorsoup.com/calculators/discretemathematics/combinations.php
+
+## GPU acceleration (OpenCL/CUDA/ROCm)
+
+The performance hotspot is evaluating the rocket mass for each deltaV distribution, which is embarrassingly parallel. That makes it a good *candidate* for GPU acceleration, but there’s a catch: the current full-grid solver first materializes the full `distributions` table on the CPU (`createTuple`). Offloading only the mass loop to a GPU would typically require copying `n_combinations * stages` bytes to the device (often hundreds of MB), which can wipe out most of the speedup on PCIe.
+
+To get a meaningful GPU win, the solver generally needs to avoid building/transferring the full table and instead:
+- Enumerate distributions on the device (composition generator or “index → composition” unranking) and compute mass in-kernel.
+- Reduce on-device to the best mass/index (or top-k for zoom) and return only a few candidates to the CPU.
+
+For CPU execution, materializing the distribution table can still be faster (it’s mostly a big sequential memory write, and keeps per-evaluation overhead low). The codebase includes both approaches: `optimizer::FullGridMode::Materialize` (default) and `optimizer::FullGridMode::Streaming` (on-the-fly generation, useful as a starting point for a GPU backend).
+
+If you want to go down that route, OpenCL is the most portable single-backend option (works across NVIDIA/AMD/Intel), while CUDA/ROCm can be added as vendor-specific backends later.
 
 Currently the program assumes that the engines always work at their vaccuum efficiency.
 I tried using the sl isp of engines for the first stage only. But that always leads to a tiny first stage, because it is so "inefficient" and therefore shouldnt be very big according to the program. Because of that, the first stage engine burns for only a very short time, causing the second stage to also burn near the surface.

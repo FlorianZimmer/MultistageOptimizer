@@ -163,10 +163,28 @@ inline unsigned long long safeMULT_ULLONG(unsigned long long a, unsigned long lo
 
 inline unsigned long long requiredBytesForPrecision(int precision, int nStages, std::size_t massTypeSize)
 {
+    (void)massTypeSize;
     unsigned long long combos = nCr(precision - 1, nStages - 1);
     unsigned long long distributions_bytes = safeMULT_ULLONG(combos, static_cast<unsigned long long>(nStages)); // uint8_t
-    unsigned long long mass_bytes = safeMULT_ULLONG(combos, static_cast<unsigned long long>(massTypeSize));
-    return safeAdd_ULLONG(distributions_bytes, mass_bytes);
+    return distributions_bytes;
+}
+
+inline unsigned long long requiredBytesForPrecisionStreaming(int precision, int nStages, std::size_t massTypeSize)
+{
+    (void)massTypeSize;
+    if (precision <= 0 || nStages <= 0) {
+        return 0;
+    }
+
+    constexpr unsigned long long dbl = static_cast<unsigned long long>(sizeof(double));
+    unsigned long long stages = static_cast<unsigned long long>(nStages);
+
+    unsigned long long ratio_entries = safeMULT_ULLONG(stages, static_cast<unsigned long long>(precision + 1));
+    unsigned long long ratio_bytes = safeMULT_ULLONG(ratio_entries, dbl);
+
+    unsigned long long per_stage_bytes = safeMULT_ULLONG(stages, 4ULL * dbl); // inert_mass_rest/fract/one_minus/inert_coeff
+
+    return safeAdd_ULLONG(ratio_bytes, per_stage_bytes);
 }
 
 //calculate the maximum precision without causing an overflow when creating the array distributions
@@ -184,6 +202,24 @@ inline int calcMaxPrecDown(int precision, int nStages, unsigned long long maxRAM
 {
     int i = precision;
     while (i > 1 && requiredBytesForPrecision(i, nStages, massTypeSize) >= maxRAM) {
+        i--;
+    }
+    return i;
+}
+
+inline int calcMaxPrecUpStreaming(int precision, int nStages, unsigned long long maxRAM, std::size_t massTypeSize)
+{
+    int i = precision;
+    while (i > 1 && requiredBytesForPrecisionStreaming(i, nStages, massTypeSize) >= maxRAM) {
+        i--;
+    }
+    return i;
+}
+
+inline int calcMaxPrecDownStreaming(int precision, int nStages, unsigned long long maxRAM, std::size_t massTypeSize)
+{
+    int i = precision;
+    while (i > 1 && requiredBytesForPrecisionStreaming(i, nStages, massTypeSize) >= maxRAM) {
         i--;
     }
     return i;

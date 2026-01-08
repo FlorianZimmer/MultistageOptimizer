@@ -17,11 +17,13 @@ Changelog :
 */
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
@@ -33,6 +35,14 @@ Changelog :
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <psapi.h>
+#endif
 
 #include "rocket_definition/Stage.hpp"
 #include "rocket_definition/Engine.hpp"
@@ -50,6 +60,72 @@ Changelog :
 
 using namespace std;
 using MassType = double;
+
+struct MemoryCounters {
+    std::uint64_t working_set_bytes = 0;
+    std::uint64_t private_bytes = 0;
+};
+
+static bool readCurrentProcessMemory(MemoryCounters& out)
+{
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    std::memset(&pmc, 0, sizeof(pmc));
+    if (!K32GetProcessMemoryInfo(GetCurrentProcess(),
+                                reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),
+                                static_cast<DWORD>(sizeof(pmc)))) {
+        return false;
+    }
+    out.working_set_bytes = static_cast<std::uint64_t>(pmc.WorkingSetSize);
+    out.private_bytes = static_cast<std::uint64_t>(pmc.PrivateUsage);
+    return true;
+#else
+    (void)out;
+    return false;
+#endif
+}
+
+template <typename Fn>
+static bool runWithPeakMemory(Fn&& fn, MemoryCounters& peak_out, int sample_ms = 5)
+{
+    std::atomic<bool> stop{false};
+    MemoryCounters peak;
+
+    if (sample_ms < 0) {
+        sample_ms = 0;
+    }
+
+    std::thread sampler([&] {
+        for (;;) {
+            MemoryCounters current;
+            if (readCurrentProcessMemory(current)) {
+                peak.working_set_bytes = std::max(peak.working_set_bytes, current.working_set_bytes);
+                peak.private_bytes = std::max(peak.private_bytes, current.private_bytes);
+            }
+            if (stop.load(std::memory_order_relaxed)) {
+                break;
+            }
+            if (sample_ms > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(sample_ms));
+            }
+        }
+    });
+
+    bool ok = false;
+    try {
+        ok = fn();
+    }
+    catch (...) {
+        stop.store(true, std::memory_order_relaxed);
+        sampler.join();
+        throw;
+    }
+
+    stop.store(true, std::memory_order_relaxed);
+    sampler.join();
+    peak_out = peak;
+    return ok;
+}
 
 struct BenchmarkTimings {
     double fill_seconds = 0.0;
@@ -76,6 +152,7 @@ struct RunOptions {
     bool pause_on_exit = true;
     bool force_verbose_off = false;
     int threads_override = 0;
+    string full_grid_mode_override;
 };
 
 struct ProgramOptions {
@@ -87,6 +164,7 @@ struct ProgramOptions {
     double benchmark_max_seconds = -1.0;
     string benchmark_compare_format = "json";
     string benchmark_csv_path = "benchmark_results.csv";
+    string full_grid_mode_override;
     bool no_prompt = false;
     bool show_help = false;
     string config_path = "config/config.json";
@@ -346,6 +424,7 @@ static void printUsage()
     std::cout << "  --benchmark-iterations <count>   Number of benchmark samples.\n";
     std::cout << "  --benchmark-warmup <count>       Warmup runs before sampling.\n";
     std::cout << "  --benchmark-threads <count>      Override thread count.\n";
+    std::cout << "  --fullgrid-mode <mode>           Full-grid mode: materialize|streaming (default: materialize).\n";
     std::cout << "  --benchmark-max-seconds <sec>    Fail if average total exceeds this.\n";
     std::cout << "  --benchmark-csv <path>           Append benchmark results to CSV.\n";
     std::cout << "  --help                           Show this help.\n";
@@ -429,6 +508,13 @@ static bool parseOptions(int argc, char** argv, ProgramOptions& options)
             }
             options.benchmark_threads = value;
         }
+        else if (arg == "--fullgrid-mode") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value for --fullgrid-mode.\n";
+                return false;
+            }
+            options.full_grid_mode_override = argv[++i];
+        }
         else if (arg == "--benchmark-max-seconds") {
             if (i + 1 >= argc) {
                 std::cerr << "Missing value for --benchmark-max-seconds.\n";
@@ -471,6 +557,26 @@ static int resolveThreadCount(bool useMultiCore, int threads_override)
     return static_cast<int>(hw_threads);
 }
 
+static bool parseFullGridModeString(const std::string& value, optimizer::FullGridMode& out)
+{
+    std::string s;
+    s.reserve(value.size());
+    for (char c : value) {
+        s.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    if (s == "materialize" || s == "materialized") {
+        out = optimizer::FullGridMode::Materialize;
+        return true;
+    }
+    if (s == "streaming" || s == "stream") {
+        out = optimizer::FullGridMode::Streaming;
+        return true;
+    }
+
+    return false;
+}
+
 static bool runOptimization(const json& config, const RunOptions& options, OptimizationSummary& summary, std::string* error_out = nullptr)
 {
     if (error_out) {
@@ -493,6 +599,28 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     }
     if (options.force_verbose_off) {
         verbose = false;
+    }
+
+    optimizer::FullGridMode full_grid_mode = optimizer::FullGridMode::Materialize;
+    if (config.contains("fullGridMode")) {
+        if (!config["fullGridMode"].is_string()) {
+            std::cerr << "Invalid fullGridMode value in config.\n";
+            setError("Invalid fullGridMode value in config.");
+            return false;
+        }
+        std::string mode = config["fullGridMode"].get<std::string>();
+        if (!parseFullGridModeString(mode, full_grid_mode)) {
+            std::cerr << "Invalid fullGridMode value in config (expected materialize|streaming).\n";
+            setError("Invalid fullGridMode value in config.");
+            return false;
+        }
+    }
+    if (!options.full_grid_mode_override.empty()) {
+        if (!parseFullGridModeString(options.full_grid_mode_override, full_grid_mode)) {
+            std::cerr << "Invalid --fullgrid-mode value (expected materialize|streaming).\n";
+            setError("Invalid --fullgrid-mode value.");
+            return false;
+        }
     }
 
     bool useMultiCore = false;
@@ -702,11 +830,18 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
 
     if (max_combinations_budget > 0) {
         if (!zoom_enabled) {
-            int chosen = optimizer::choosePrecisionForMaxCombinations(static_cast<int>(stage_count),
-                                                                      max_combinations_budget,
-                                                                      maxRAM,
-                                                                      sizeof(MassType),
-                                                                      255);
+            int chosen =
+                (full_grid_mode == optimizer::FullGridMode::Streaming)
+                    ? optimizer::choosePrecisionForMaxCombinationsStreaming(static_cast<int>(stage_count),
+                                                                            max_combinations_budget,
+                                                                            maxRAM,
+                                                                            sizeof(MassType),
+                                                                            255)
+                    : optimizer::choosePrecisionForMaxCombinations(static_cast<int>(stage_count),
+                                                                  max_combinations_budget,
+                                                                  maxRAM,
+                                                                  sizeof(MassType),
+                                                                  255);
             if (chosen <= 0) {
                 std::cerr << "Unable to satisfy maxCombinations budget with current stage count and RAM.\n";
                 setError("Unable to satisfy maxCombinations budget with current stage count and RAM.");
@@ -717,11 +852,18 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         }
         else {
             const std::uint64_t coarse_budget = std::max<std::uint64_t>(1, static_cast<std::uint64_t>(std::floor(static_cast<double>(max_combinations_budget) * 0.7)));
-            int coarse_cap = optimizer::choosePrecisionForMaxCombinations(static_cast<int>(stage_count),
-                                                                          coarse_budget,
-                                                                          maxRAM,
-                                                                          sizeof(MassType),
-                                                                          effective_precision);
+            int coarse_cap =
+                (full_grid_mode == optimizer::FullGridMode::Streaming)
+                    ? optimizer::choosePrecisionForMaxCombinationsStreaming(static_cast<int>(stage_count),
+                                                                            coarse_budget,
+                                                                            maxRAM,
+                                                                            sizeof(MassType),
+                                                                            effective_precision)
+                    : optimizer::choosePrecisionForMaxCombinations(static_cast<int>(stage_count),
+                                                                  coarse_budget,
+                                                                  maxRAM,
+                                                                  sizeof(MassType),
+                                                                  effective_precision);
             if (coarse_cap <= 0) {
                 std::cerr << "Unable to satisfy maxCombinations coarse budget with current stage count and RAM.\n";
                 setError("Unable to satisfy maxCombinations coarse budget with current stage count and RAM.");
@@ -758,10 +900,16 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         return false;
     }
 
-    unsigned long long coarse_required = requiredBytesForPrecision(coarse_precision, static_cast<int>(stage_count), sizeof(MassType));
+    unsigned long long coarse_required =
+        (full_grid_mode == optimizer::FullGridMode::Streaming)
+            ? requiredBytesForPrecisionStreaming(coarse_precision, static_cast<int>(stage_count), sizeof(MassType))
+            : requiredBytesForPrecision(coarse_precision, static_cast<int>(stage_count), sizeof(MassType));
     if (!zoom_enabled) {
         if (coarse_required >= maxRAM) {
-            int max_prec = calcMaxPrecUp(coarse_precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType));
+            int max_prec =
+                (full_grid_mode == optimizer::FullGridMode::Streaming)
+                    ? calcMaxPrecUpStreaming(coarse_precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType))
+                    : calcMaxPrecUp(coarse_precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType));
             std::cerr << "Precision too high for the amount of stages and maxRAM.\n";
             std::cerr << "Requested precision: " << coarse_precision << "\n";
             std::cerr << "Stages: " << stage_count << "\n";
@@ -775,7 +923,10 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     }
     else {
         if (coarse_required >= maxRAM) {
-            int max_prec = calcMaxPrecUp(coarse_precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType));
+            int max_prec =
+                (full_grid_mode == optimizer::FullGridMode::Streaming)
+                    ? calcMaxPrecUpStreaming(coarse_precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType))
+                    : calcMaxPrecUp(coarse_precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType));
             std::cerr << "Zoom coarse_precision too high for the amount of stages and maxRAM.\n";
             std::cerr << "Requested coarse_precision: " << coarse_precision << "\n";
             std::cerr << "Stages: " << stage_count << "\n";
@@ -790,7 +941,10 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
 
     if (options.print_output) {
         std::cout << "For the number of stages and RAM currently given, the maximum precision can be raised to: "
-                  << calcMaxPrecDown(255, static_cast<int>(stage_count), maxRAM, sizeof(MassType)) << "\n\n";
+                  << ((full_grid_mode == optimizer::FullGridMode::Streaming)
+                          ? calcMaxPrecDownStreaming(255, static_cast<int>(stage_count), maxRAM, sizeof(MassType))
+                          : calcMaxPrecDown(255, static_cast<int>(stage_count), maxRAM, sizeof(MassType)))
+                  << "\n\n";
         if (zoom_enabled) {
             std::cout << "Zoom enabled: coarse_precision=" << coarse_precision
                       << " fine_precision=" << effective_precision << "\n";
@@ -818,7 +972,7 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     }
 
     if (!zoom_enabled) {
-        optimizer::FullGridResult solve = optimizer::solveFullGrid(rocket, effective_precision, verbose, nThreads, 1);
+        optimizer::FullGridResult solve = optimizer::solveFullGrid(rocket, effective_precision, verbose, nThreads, 1, full_grid_mode);
         min = solve.best_mass;
         index = static_cast<long long>(solve.best_index);
         bestDistro = solve.best_units;
@@ -832,6 +986,7 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         zoom_options.coarse_precision = coarse_precision;
         zoom_options.fine_precision = effective_precision;
         zoom_options.max_evaluations = refinement_budget;
+        zoom_options.full_grid_mode = full_grid_mode;
         optimizer::ZoomResult solve = optimizer::solveZoom(rocket, zoom_options);
         min = solve.best_mass;
         index = -1;
@@ -1052,6 +1207,7 @@ static int runBenchmark(const json& config, const ProgramOptions& options, const
     run_options.pause_on_exit = false;
     run_options.force_verbose_off = true;
     run_options.threads_override = options.benchmark_threads;
+    run_options.full_grid_mode_override = options.full_grid_mode_override;
 
     OptimizationSummary summary;
     for (int i = 0; i < options.benchmark_warmup; i++) {
@@ -1145,6 +1301,7 @@ struct StrategyBenchmarkResult {
     OptimizationSummary summary;
     BenchmarkTimings average_timings;
     BenchmarkTimings worst_timings;
+    MemoryCounters peak_memory;
     bool ok = false;
     std::string error;
 };
@@ -1162,6 +1319,7 @@ static bool runStrategyBenchmark(const std::string& name,
     run_options.pause_on_exit = false;
     run_options.force_verbose_off = true;
     run_options.threads_override = options.benchmark_threads;
+    run_options.full_grid_mode_override = options.full_grid_mode_override;
 
     for (int i = 0; i < options.benchmark_warmup; i++) {
         OptimizationSummary warmup_summary;
@@ -1175,16 +1333,21 @@ static bool runStrategyBenchmark(const std::string& name,
 
     BenchmarkTimings total_timings;
     BenchmarkTimings worst_timings;
+    MemoryCounters worst_memory;
     bool first_sample = true;
 
     for (int i = 0; i < options.benchmark_iterations; i++) {
         OptimizationSummary sample_summary;
         std::string error;
-        if (!runOptimization(config, run_options, sample_summary, &error)) {
+        MemoryCounters peak;
+        bool ok = runWithPeakMemory([&] { return runOptimization(config, run_options, sample_summary, &error); }, peak);
+        if (!ok) {
             out.status = "error";
             out.error = error.empty() ? "Optimization failed" : error;
             return false;
         }
+        worst_memory.working_set_bytes = std::max(worst_memory.working_set_bytes, peak.working_set_bytes);
+        worst_memory.private_bytes = std::max(worst_memory.private_bytes, peak.private_bytes);
         if (first_sample) {
             out.summary = sample_summary;
             worst_timings = sample_summary.timings;
@@ -1200,6 +1363,7 @@ static bool runStrategyBenchmark(const std::string& name,
 
     out.average_timings = divideTimings(total_timings, options.benchmark_iterations);
     out.worst_timings = worst_timings;
+    out.peak_memory = worst_memory;
 
     bool passed = options.benchmark_max_seconds <= 0.0 || out.average_timings.total_seconds <= options.benchmark_max_seconds;
     out.status = passed ? "pass" : "fail";
@@ -1221,6 +1385,8 @@ static json strategyToJson(const StrategyBenchmarkResult& result)
     out["n_combinations"] = result.summary.n_combinations;
     out["threads"] = result.summary.threads_used;
     out["min_mass"] = result.summary.min_mass;
+    out["memory_peak_working_set_bytes"] = result.peak_memory.working_set_bytes;
+    out["memory_peak_private_bytes"] = result.peak_memory.private_bytes;
 
     out["best_distribution_units"] = json::array();
     for (unsigned char v : result.summary.best_distribution) {
@@ -1276,6 +1442,15 @@ static std::string formatUInt64ForTable(std::uint64_t value)
     return util::formatThousands(value);
 }
 
+static std::string formatMiBForTable(std::uint64_t bytes, int precision = 2)
+{
+    if (precision < 0) {
+        precision = 0;
+    }
+    double mib = static_cast<double>(bytes) / (1024.0 * 1024.0);
+    return util::formatDoubleThousands(mib, precision) + " MiB";
+}
+
 static std::string formatMassForTable(double mass_kg)
 {
     return util::formatDoubleThousands(mass_kg, 3) + " kg";
@@ -1329,6 +1504,19 @@ static void printBenchmarkCompareTable(const std::vector<StrategyBenchmarkResult
             return std::string{};
         }
         return formatUInt64ForTable(static_cast<std::uint64_t>(r.summary.n_combinations));
+    }));
+
+    rows.push_back(metricRow("mem_peak_working_set", [](const StrategyBenchmarkResult& r) {
+        if (r.status == "error" || r.peak_memory.working_set_bytes == 0) {
+            return std::string{};
+        }
+        return formatMiBForTable(r.peak_memory.working_set_bytes, 2);
+    }));
+    rows.push_back(metricRow("mem_peak_private", [](const StrategyBenchmarkResult& r) {
+        if (r.status == "error" || r.peak_memory.private_bytes == 0) {
+            return std::string{};
+        }
+        return formatMiBForTable(r.peak_memory.private_bytes, 2);
     }));
     rows.push_back(metricRow("min_mass", [](const StrategyBenchmarkResult& r) {
         if (r.status == "error") {
@@ -1440,6 +1628,9 @@ static void printBenchmarkCompareTable(const std::vector<StrategyBenchmarkResult
 
 static int runBenchmarkCompare(const json& base_config, const ProgramOptions& options, const string& config_path)
 {
+    ProgramOptions local_options = options;
+    local_options.full_grid_mode_override.clear();
+
     json config = base_config;
     if (!config.contains("verbose")) {
         config["verbose"] = false;
@@ -1489,7 +1680,12 @@ static int runBenchmarkCompare(const json& base_config, const ProgramOptions& op
         if (fine_precision > 0) {
             cfg["precision"] = fine_precision;
         }
+        cfg["fullGridMode"] = "materialize";
         strategies.push_back({"full_grid", cfg});
+
+        json streaming_cfg = cfg;
+        streaming_cfg["fullGridMode"] = "streaming";
+        strategies.push_back({"full_grid_streaming", streaming_cfg});
     }
 
     // Zoom only (no budgets), if zoom is present in the config.
@@ -1529,7 +1725,7 @@ static int runBenchmarkCompare(const json& base_config, const ProgramOptions& op
 
     for (const auto& entry : strategies) {
         StrategyBenchmarkResult r;
-        if (!runStrategyBenchmark(entry.first, entry.second, options, r)) {
+        if (!runStrategyBenchmark(entry.first, entry.second, local_options, r)) {
             any_error = true;
             all_passed = false;
         }
@@ -1666,6 +1862,7 @@ int main(int argc, char** argv)
     run_options.pause_on_exit = !options.no_prompt;
     run_options.force_verbose_off = false;
     run_options.threads_override = 0;
+    run_options.full_grid_mode_override = options.full_grid_mode_override;
 
     OptimizationSummary summary;
     if (!runOptimization(config, run_options, summary)) {

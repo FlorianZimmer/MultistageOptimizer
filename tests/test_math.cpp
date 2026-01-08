@@ -57,9 +57,7 @@ TEST_CASE("requiredBytesForPrecision: matches manual sizing for small values")
     const unsigned long long combos = nCr(precision - 1, stages - 1); // nCr(9, 1) = 9
     REQUIRE(combos == 9);
 
-    const unsigned long long expected =
-        static_cast<unsigned long long>(combos * stages) +
-        static_cast<unsigned long long>(combos * massTypeSize);
+    const unsigned long long expected = static_cast<unsigned long long>(combos * stages);
 
     REQUIRE(requiredBytesForPrecision(precision, stages, massTypeSize) == expected);
 }
@@ -68,7 +66,7 @@ TEST_CASE("calcMaxPrecUp: decreases precision until required bytes fit")
 {
     const int precision = 10;
     const int stages = 2;
-    const unsigned long long maxRAM = 90; // requiredBytesForPrecision(10,2,8) == 90
+    const unsigned long long maxRAM = 18; // requiredBytesForPrecision(10,2,8) == 18
     const std::size_t massTypeSize = sizeof(double);
 
     const int max_prec = calcMaxPrecUp(precision, stages, maxRAM, massTypeSize);
@@ -86,4 +84,3 @@ TEST_CASE("ArrToPerc: converts distribution units to percentages")
     CHECK_NEAR(out[1], 20.0, 1e-12);
     CHECK_NEAR(out[2], 70.0, 1e-12);
 }
-
