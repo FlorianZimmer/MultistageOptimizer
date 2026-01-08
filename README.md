@@ -117,10 +117,28 @@ Benchmark runs also append a CSV row to `benchmark_results.csv` (override with `
 
 ## Build
 
-- Visual Studio: open `MultistageOptimizer.sln` and build.
-- clang++ (quick build, no IDE):
-  - `clang++ -std=c++17 -O2 -DNDEBUG -I. MultistageOptimizer.cpp -o MultistageOptimizer.exe`
-  - tests: `clang++ -std=c++17 -O2 -DNDEBUG -I. -Itests tests/*.cpp -o MultistageOptimizerTests.exe`
+- Make (wraps CMake):
+  - `make build`
+  - `make test`
+  - `make distclean`
+  - Options: `make BUILD_DIR=build-ninja CONFIG=Release` (plus `GENERATOR=...` / `ARCH=...` if needed).
+
+- CMake (recommended):
+  - Visual Studio generator:
+    - `cmake -S . -B build -G "Visual Studio 17 2022" -A x64`
+    - `cmake --build build --config Release`
+    - tests: `ctest --test-dir build -C Release --output-on-failure`
+    - exe: `build/Release/MultistageOptimizer.exe`
+  - Ninja (faster incremental builds):
+    - `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release`
+    - `cmake --build build`
+    - tests: `ctest --test-dir build --output-on-failure`
+    - exe: `build/MultistageOptimizer.exe`
+
+- Manual build (no CMake):
+  - clang++ (quick build, no IDE):
+    - `clang++ -std=c++17 -O2 -DNDEBUG -I. MultistageOptimizer.cpp -o MultistageOptimizer.exe`
+    - tests: `clang++ -std=c++17 -O2 -DNDEBUG -I. -Itests tests/*.cpp -o MultistageOptimizerTests.exe`
 
 ## Releases (continuous builds)
 

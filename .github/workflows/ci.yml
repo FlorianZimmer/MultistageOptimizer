@@ -10,20 +10,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
-      - name: Build (Release x64)
-        run: msbuild MultistageOptimizer.sln /p:Configuration=Release /p:Platform=x64
+      - name: Configure (CMake, x64)
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - name: Build (Release)
+        run: cmake --build build --config Release
       - name: Unit tests
-        run: |
-          $exe = "x64\Release\MultistageOptimizerTests.exe"
-          if (!(Test-Path $exe)) { throw "Missing test executable at $exe" }
-          & $exe
+        shell: pwsh
+        run: ctest --test-dir build -C Release --output-on-failure
       - name: Benchmark
         env:
           GIT_HEAD: ${{ github.sha }}
           BENCHMARK_MAX_SECONDS: 10
           BENCHMARK_MAX_MIN_SECONDS: 1
         run: |
-          $exe = "x64\Release\MultistageOptimizer.exe"
+          $exe = "build\\Release\\MultistageOptimizer.exe"
           if (!(Test-Path $exe)) { throw "Missing executable at $exe" }
           $csv = Join-Path $env:RUNNER_TEMP "benchmark_results.csv"
           $output = & $exe --benchmark --benchmark-config config/benchmark_ci.json --benchmark-threads 1 --benchmark-iterations 1 --benchmark-warmup 1 --benchmark-max-seconds $env:BENCHMARK_MAX_SECONDS --benchmark-csv $csv --no-prompt | Out-String
