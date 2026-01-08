@@ -122,6 +122,13 @@ Benchmark runs also append a CSV row to `benchmark_results.csv` (override with `
   - `clang++ -std=c++17 -O2 -DNDEBUG -I. MultistageOptimizer.cpp -o MultistageOptimizer.exe`
   - tests: `clang++ -std=c++17 -O2 -DNDEBUG -I. -Itests tests/*.cpp -o MultistageOptimizerTests.exe`
 
+## Releases (continuous builds)
+
+GitHub Actions publishes rolling prereleases for every commit to `main`/`master`:
+
+- Tag format: `b<commit-count>` (for example `b123`).
+- Assets: `MultistageOptimizer-windows-x64-b<commit-count>.zip` containing `MultistageOptimizer.exe` + sample `config/`.
+
 ## Limitations
 
 Upwards of six stages we get into realms of impossible amount of necessary RAM, with higher precisions, as the number of different distributions is calculated with n choose r where n is the precision - 1 and r is the number of stages - 1.\

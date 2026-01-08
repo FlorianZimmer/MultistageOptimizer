@@ -1,0 +1,67 @@
+name: Release (continuous)
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Compute build tag
+        id: ver
+        shell: pwsh
+        run: |
+          $count = git rev-list --count HEAD
+          $sha = git rev-parse --short=8 HEAD
+          $tag = "b$count"
+          "count=$count" >> $env:GITHUB_OUTPUT
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Build (Release x64)
+        run: msbuild MultistageOptimizer.sln /p:Configuration=Release /p:Platform=x64
+
+      - name: Unit tests
+        shell: pwsh
+        run: |
+          $exe = "x64\\Release\\MultistageOptimizerTests.exe"
+          if (!(Test-Path $exe)) { throw "Missing test executable at $exe" }
+          & $exe
+
+      - name: Package
+        id: pkg
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.ver.outputs.tag }}"
+          $zip = "MultistageOptimizer-windows-x64-$tag.zip"
+
+          Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          Copy-Item "x64\\Release\\MultistageOptimizer.exe" dist/
+          Copy-Item "LICENSE.md" dist/
+          Copy-Item "README.md" dist/
+          Copy-Item -Recurse "config" dist/config
+
+          Compress-Archive -Path "dist\\*" -DestinationPath $zip -Force
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: MultistageOptimizer ${{ steps.ver.outputs.tag }}
+          prerelease: true
+          generate_release_notes: true
+          files: ${{ steps.pkg.outputs.zip }}

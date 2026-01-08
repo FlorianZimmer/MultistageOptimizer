@@ -108,6 +108,9 @@ ipch/
 *.VC.db
 *.VC.VC.opendb
 
+# Local build outputs (we ship binaries via releases, not git)
+*.exe
+
 # Visual Studio profiler
 *.psess
 *.vsp
