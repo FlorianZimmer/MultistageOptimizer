@@ -15,7 +15,7 @@ They provide a request and choose a `DELIVERABLE_TYPE`:
 
 You will:
 1) Decide what repo info is needed for that request
-2) Produce **one** Repomix output file (XML preferred) staying **< 60k tokens** and write it to disk (do **not** paste the XML into chat)
+2) Produce **one** Repomix output file (prefer `--style plain` for lowest token overhead) staying **< 60k tokens** and write it to disk (do **not** paste the packed output into chat)
 3) Ensure the packed file contains an **embedded instruction contract** that forces exactly **one** deliverable the user can return to Codex CLI
 
 ## Hard constraints
@@ -91,20 +91,26 @@ Copy templates into `repomix/work/` and edit the request:
 4) Optionally edit `repomix/work/02_CONTEXT_NOTES.md`
 
 ## Step 2 — Run repomix to generate ONE packed file
-Default: XML output.
+Default: `plain` output and **include the directory structure** (helps navigation in the browser model).
 
 ### If REPO_TARGET is local
 Start with focused include patterns. Keep **full file contents** by default (no compression) so the browser model can reason about exact logic and comments.
 
 - First attempt (focused, full contents):
-  `npx repomix@latest . --style xml --no-gitignore --output repomix/work/outputs/repomix-bridge.xml --include "<PATTERNS>"`
+  `npx repomix@latest . --style plain --no-file-summary --no-gitignore --output repomix/work/outputs/repomix-bridge.txt --include "<PATTERNS>"`
 
 > Keep comments by default. Do **not** pass `--remove-comments` unless the user explicitly requests it.
 
 > `--compress` is **not** the default: it extracts a structural summary (classes/functions) and can remove implementation details that matter for debugging and logic reviews. Only use it as a last resort to get under the token budget.
 
 ### If REPO_TARGET is remote
-`npx repomix@latest --remote <owner/repo or url> --style xml --output repomix/work/outputs/repomix-bridge.xml --include "<PATTERNS>"`
+`npx repomix@latest --remote <owner/repo or url> --style plain --no-file-summary --output repomix/work/outputs/repomix-bridge.txt --include "<PATTERNS>"`
+
+Notes on output styles (token efficiency):
+- `plain` with `--no-file-summary` is typically very token-efficient.
+- `markdown` is usually close to `plain` but slightly larger.
+- `json` tends to be larger due to quoting/escaping.
+- `xml` + `--parsable-style` can be significantly larger due to entity escaping; avoid unless you truly need strict XML.
 
 ### Always include the bridge instruction files
 Make sure `<PATTERNS>` includes:
@@ -115,7 +121,7 @@ Make sure `<PATTERNS>` includes:
 > Note: `repomix/work/` is gitignored. Always pass `--no-gitignore` or the request/instruction files may be silently excluded.
 
 Sanity check (after packing): confirm the output contains `repomix/work/01_REQUEST.md`:
-- `rg -n "file path=\\"repomix/work/01_REQUEST\\.md\\"" repomix/work/outputs/repomix-bridge.xml`
+- `rg -n "File: repomix/work/01_REQUEST\\.md" repomix/work/outputs/repomix-bridge.txt`
 
 ## Step 3 — Token budget enforcement loop (must)
 After each repomix run, read the printed token estimate.
@@ -129,7 +135,9 @@ If tokens >= 60k:
 3) If still too large, consider content-reduction flags:
    - `--remove-empty-lines` (usually safe)
    - `--remove-comments` (**only if the user asked**)
-4) **Last resort only:** add `--compress` (with the caveat that it may omit logic details)
+4) If still too large, reduce metadata:
+   - Add `--no-directory-structure` (saves tokens, but reduces navigability)
+5) **Last resort only:** add `--compress` (with the caveat that it may omit logic details)
 
 Repeat until < 60k.
 
