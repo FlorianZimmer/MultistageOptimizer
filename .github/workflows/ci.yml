@@ -12,6 +12,11 @@ jobs:
       - uses: microsoft/setup-msbuild@v2
       - name: Build (Release x64)
         run: msbuild MultistageOptimizer.sln /p:Configuration=Release /p:Platform=x64
+      - name: Unit tests
+        run: |
+          $exe = "x64\Release\MultistageOptimizerTests.exe"
+          if (!(Test-Path $exe)) { throw "Missing test executable at $exe" }
+          & $exe
       - name: Benchmark
         env:
           GIT_HEAD: ${{ github.sha }}

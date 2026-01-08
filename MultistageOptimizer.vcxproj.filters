@@ -42,6 +42,9 @@
     <ClInclude Include="rocket_definition\Stage.hpp">
       <Filter>Headerdateien</Filter>
     </ClInclude>
+    <ClInclude Include="util\config_parsing.hpp">
+      <Filter>Headerdateien</Filter>
+    </ClInclude>
     <ClInclude Include="resource2.h">
       <Filter>Headerdateien</Filter>
     </ClInclude>
