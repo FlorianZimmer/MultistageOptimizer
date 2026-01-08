@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-benchmark:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - name: Build (Release x64)
+        run: msbuild MultistageOptimizer.sln /p:Configuration=Release /p:Platform=x64
+      - name: Benchmark
+        env:
+          GIT_HEAD: ${{ github.sha }}
+          BENCHMARK_MAX_SECONDS: 10
+        run: |
+          $exe = "x64\Release\MultistageOptimizer.exe"
+          if (!(Test-Path $exe)) { throw "Missing executable at $exe" }
+          & $exe --benchmark --benchmark-config config/benchmark.json --benchmark-threads 1 --benchmark-iterations 1 --benchmark-warmup 1 --benchmark-max-seconds $env:BENCHMARK_MAX_SECONDS --no-prompt

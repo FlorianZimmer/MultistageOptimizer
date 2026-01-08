@@ -7,30 +7,30 @@
     {
       "engine": "M_1U_SL",
       "engine_count": 1,
-      "total_mass": 35863,
+      "total_mass": 35703,
       "dry_mass": 1104,
       "wet_mass": 26580
     },
     {
       "engine": "M_1U_SL",
       "engine_count": 1,
-      "total_mass": 182046,
+      "total_mass": 168594,
       "dry_mass": 6622,
       "wet_mass": 159500
     },
     {
       "engine": "M_1U_SL",
       "engine_count": 2,
-      "total_mass": 589810,
+      "total_mass": 576331,
       "dry_mass": 23180,
       "wet_mass": 558200
     },
     {
       "engine": "M_1U_SL",
       "engine_count": 4,
-      "total_mass": 2052320,
+      "total_mass": 2030020,
       "dry_mass": 82780,
-      "wet_mass": 1993000
+      "wet_mass": 1994000
     }
   ]
 }

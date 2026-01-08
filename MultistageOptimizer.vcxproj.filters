@@ -52,6 +52,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <None Include="config\benchmark.json">
+      <Filter>Ressourcendateien</Filter>
+    </None>
     <None Include="config\engines.json">
       <Filter>Ressourcendateien</Filter>
     </None>

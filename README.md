@@ -23,13 +23,24 @@ i.e. for a two stage Rocket with a precision of 150 the first calculation will b
 1st Stage 1/150 of total deltaV\
 2nd Stage 149/150 of total deltaV
                                                                                      
-maxRAM 				-> maximum allowed RAM usage in bytes. Will warn user if defined parameters will cause more RAM usage than specified here.
+maxRAM 				-> maximum allowed RAM usage in bytes. Supports human-readable values like 16GB (base 1024).
   
 verbose 			-> should only be used for debugging, as it slows down the programm alot and in single-threaded mode, as the output isnt orderd when using multithreading.
   
 enginesPath 	-> path to json where engines are defined.
   
 rocketPath		-> path to json where rocket is defined.
+
+## Benchmark
+
+Run a benchmark and emit JSON with the git head for easy comparisons:
+
+```
+MultistageOptimizer.exe --benchmark --benchmark-config config/benchmark.json --benchmark-threads 1 --benchmark-iterations 3
+```
+
+Use `--benchmark-max-seconds <sec>` to fail the run if the average total time exceeds the limit (this is what CI uses).
+Benchmark runs also append a CSV row to `benchmark_results.csv` (override with `--benchmark-csv <path>`).
 
 ## Limitations
 
