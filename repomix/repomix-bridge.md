@@ -15,7 +15,7 @@ They provide a request and choose a `DELIVERABLE_TYPE`:
 
 You will:
 1) Decide what repo info is needed for that request
-2) Produce **one** Repomix output file (XML preferred) staying **< 60k tokens**
+2) Produce **one** Repomix output file (XML preferred) staying **< 60k tokens** and write it to disk (do **not** paste the XML into chat)
 3) Ensure the packed file contains an **embedded instruction contract** that forces exactly **one** deliverable the user can return to Codex CLI
 
 ## Hard constraints
@@ -24,6 +24,7 @@ You will:
 - Prefer **minimal, relevant scope** over “whole repo”.
 - Avoid secrets: never include .env, keys, credentials, tokens, private certs. (Repomix security filters help; still be careful.)
 - The bridge exists to steer **Codex CLI**; the browser model must produce paste-ready output.
+- Do **not** paste the packed XML back into chat; write it to the output file and tell the user where it is.
 
 ## Inputs (from user)
 - DELIVERABLE_TYPE: PLAN | REVIEW | RESULT | BRAINSTORM
@@ -91,16 +92,17 @@ Copy templates into `repomix/work/` and edit the request:
 Default: XML output.
 
 ### If REPO_TARGET is local
-Start with focused include patterns and compression if needed:
+Start with focused include patterns. Keep **full file contents** by default (no compression) so the browser model can reason about exact logic and comments.
 
-- First attempt (focused, no compression):
-  `npx repomix@latest . --style xml --output repomix-bridge.xml --include "<PATTERNS>"`
+- First attempt (focused, full contents):
+  `npx repomix@latest . --style xml --no-gitignore --output repomix-bridge.xml --include "<PATTERNS>"`
 
-- If it’s big, enable compression:
-  `npx repomix@latest . --style xml --compress --output repomix-bridge.xml --include "<PATTERNS>"`
+> Keep comments by default. Do **not** pass `--remove-comments` unless the user explicitly requests it.
+
+> `--compress` is **not** the default: it extracts a structural summary (classes/functions) and can remove implementation details that matter for debugging and logic reviews. Only use it as a last resort to get under the token budget.
 
 ### If REPO_TARGET is remote
-`npx repomix@latest --remote <owner/repo or url> --style xml --compress --output repomix-bridge.xml --include "<PATTERNS>"`
+`npx repomix@latest --remote <owner/repo or url> --style xml --output repomix-bridge.xml --include "<PATTERNS>"`
 
 ### Always include the bridge instruction files
 Make sure `<PATTERNS>` includes:
@@ -108,18 +110,24 @@ Make sure `<PATTERNS>` includes:
 - `repomix/work/01_REQUEST.md`
 - `repomix/work/02_CONTEXT_NOTES.md` (if created)
 
-> Note: `repomix/work/` is gitignored. If Repomix respects `.gitignore` in your setup, pass `--no-gitignore` so these files still make it into the pack.
+> Note: `repomix/work/` is gitignored. Always pass `--no-gitignore` or the request/instruction files may be silently excluded.
+
+Sanity check (after packing): confirm the output contains `repomix/work/01_REQUEST.md`:
+- `rg -n "file path=\\"repomix/work/01_REQUEST\\.md\\"" repomix-bridge.xml`
 
 ## Step 3 — Token budget enforcement loop (must)
 After each repomix run, read the printed token estimate.
 
 If tokens >= 60k:
-1) Add `--compress` (if not already)
-2) Narrow include patterns:
+1) Narrow include patterns:
    - Drop tests (`**/*test*`, `**/__tests__/**`) unless essential
    - Drop docs except key ones (`README*`, `docs/` only if needed)
    - Drop examples, fixtures, mocks
-3) Prefer “search-driven slice”: include only files matched by `rg` + direct dependencies + entrypoints
+2) Prefer “search-driven slice”: include only files matched by `rg` + direct dependencies + entrypoints
+3) If still too large, consider content-reduction flags:
+   - `--remove-empty-lines` (usually safe)
+   - `--remove-comments` (**only if the user asked**)
+4) **Last resort only:** add `--compress` (with the caveat that it may omit logic details)
 
 Repeat until < 60k.
 
@@ -133,8 +141,8 @@ Return in this exact shape:
    - token estimate
    - what was included (high level)
    - output filename
-2) Then output **ONLY the full contents** of `repomix-bridge.xml` (so user can paste it into the browser model).
-   - No extra commentary after the XML.
+2) Stop. Do **not** paste XML into chat.
+   - The packed context lives in the output file; the user can open it and copy/paste its contents into the browser model.
    - No second file.
    - No “next steps” (browser will produce the deliverable).
 
