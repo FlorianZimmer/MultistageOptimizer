@@ -146,13 +146,19 @@
 
   <ItemGroup>
     <ClCompile Include="test_calcMass.cpp" />
+    <ClCompile Include="test_bounded_compositions.cpp" />
+    <ClCompile Include="test_budget.cpp" />
     <ClCompile Include="test_config_parsing.cpp" />
     <ClCompile Include="test_distributions.cpp" />
     <ClCompile Include="test_json_import.cpp" />
     <ClCompile Include="test_main.cpp" />
     <ClCompile Include="test_math.cpp" />
+    <ClCompile Include="test_format_numbers.cpp" />
+    <ClCompile Include="test_reporting.cpp" />
     <ClCompile Include="test_rocket_definition.cpp" />
+    <ClCompile Include="test_text_table.cpp" />
     <ClCompile Include="test_validation.cpp" />
+    <ClCompile Include="test_zoom.cpp" />
   </ItemGroup>
 
   <ItemGroup>

@@ -21,7 +21,21 @@ jobs:
         env:
           GIT_HEAD: ${{ github.sha }}
           BENCHMARK_MAX_SECONDS: 10
+          BENCHMARK_MAX_MIN_SECONDS: 1
         run: |
           $exe = "x64\Release\MultistageOptimizer.exe"
           if (!(Test-Path $exe)) { throw "Missing executable at $exe" }
-          & $exe --benchmark --benchmark-config config/benchmark.json --benchmark-threads 1 --benchmark-iterations 1 --benchmark-warmup 1 --benchmark-max-seconds $env:BENCHMARK_MAX_SECONDS --no-prompt
+          $csv = Join-Path $env:RUNNER_TEMP "benchmark_results.csv"
+          $output = & $exe --benchmark --benchmark-config config/benchmark_ci.json --benchmark-threads 1 --benchmark-iterations 1 --benchmark-warmup 1 --benchmark-max-seconds $env:BENCHMARK_MAX_SECONDS --benchmark-csv $csv --no-prompt | Out-String
+          $exitCode = $LASTEXITCODE
+          $result = $output | ConvertFrom-Json
+
+          if ($result.status -ne "pass") {
+            throw "Benchmark status=$($result.status) exitCode=$exitCode`n$output"
+          }
+          if ([double]$result.timings_seconds.min_max -gt [double]$env:BENCHMARK_MAX_MIN_SECONDS) {
+            throw "Performance regression: min_max=$($result.timings_seconds.min_max)s > $env:BENCHMARK_MAX_MIN_SECONDS`s`n$output"
+          }
+          if ($exitCode -ne 0) {
+            throw "Benchmark exited with code $exitCode`n$output"
+          }

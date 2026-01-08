@@ -1,4 +1,4 @@
-# Mutlistage optimizer for rockets
+# Multistage optimizer for rockets
 
 Calculate optimal mass for each stage given a deltaV requirement on a multistage rocket.
 
@@ -14,30 +14,102 @@ http://www.projectrho.com/public_html/rocket/multistage.php
 
 Options can be found in config/config.json.
 
-useMultiCore	-> if program should utilize all available cores.
+- `useMultiCore`: if program should utilize all available cores.
+- `precision`: the number of discretization steps used to split total deltaV across stages (1..255).
+  - Example (2 stages, precision 150): stage split candidates include `1/150` + `149/150`, `2/150` + `148/150`, ...
+- `maxRAM`: maximum allowed RAM usage in bytes. Supports human-readable values like `16GB` (base 1024).
+- `verbose`: debugging output (slow; only coherent in single-threaded mode).
+- `enginesPath`: path to JSON where engines are defined.
+- `rocketPath`: path to JSON where rocket is defined.
 
-precision 		-> the number specifies the combined steps the program should take in splitting the deltaV;\
-higher equals better, but cant go above 255 due to implementing the array that holds these numbers as chars.
+### Runtime budgets
 
-i.e. for a two stage Rocket with a precision of 150 the first calculation will be:\
-1st Stage 1/150 of total deltaV\
-2nd Stage 149/150 of total deltaV
-                                                                                     
-maxRAM 				-> maximum allowed RAM usage in bytes. Supports human-readable values like 16GB (base 1024).
-  
-verbose 			-> should only be used for debugging, as it slows down the programm alot and in single-threaded mode, as the output isnt orderd when using multithreading.
-  
-enginesPath 	-> path to json where engines are defined.
-  
-rocketPath		-> path to json where rocket is defined.
+- `maxCombinations`: deterministic *work* budget. If set, the program chooses the largest precision that keeps the number of evaluated distributions `<= maxCombinations` (and within `maxRAM`).
+- With `zoom.enabled=true`, `maxCombinations` applies to the total work across both passes (coarse + refined). The current default split is ~70% coarse, remainder refined (the refinement radius may be reduced to stay within budget).
+- `targetSeconds`: best-effort runtime target. If set (and `maxCombinations` is not set), the program runs a short calibration and derives a `maxCombinations` budget from it.
+  - Note: `targetSeconds` is not deterministic across different machines (and can vary slightly even on the same machine).
+
+### Zoom refinement (coarse-to-fine)
+
+Enable a fast coarse search and then refine only around the best candidates at a higher precision:
+
+- `zoom.enabled`: enable zoom mode.
+- `zoom.fine_precision`: final precision (defaults to `precision`).
+- `zoom.coarse_precision`: coarse pass precision (defaults to `fine_precision/2`).
+- `zoom.window_coarse_steps`: neighborhood radius around the coarse winner(s), expressed in coarse steps (converted to fine units internally).
+- `zoom.top_k`: refine the best K coarse candidates (reduces risk of missing the true optimum).
+
+When zoom is enabled, the program prints `# Combinations (coarse)` and `# Combinations (refined)`. (There is no single distribution index for the refined search, so it won't print `kg at Distribution number ...`.)
+
+### Reporting (soft warnings)
+
+- `reporting.min_stage_dv_mps`: warn if a stage contributes less than this amount of deltaV (suggesting to remove/merge that stage). This does not affect optimization; it only prints warnings.
+
+### Example config snippet
+
+```json
+{
+  "useMultiCore": true,
+  "precision": 100,
+  "maxRAM": "16GB",
+  "enginesPath": "config/engines.json",
+  "rocketPath": "config/rocket_4stage.json",
+  "maxCombinations": 5000000,
+  "zoom": {
+    "enabled": true,
+    "fine_precision": 120,
+    "coarse_precision": 60,
+    "window_coarse_steps": 2,
+    "top_k": 3
+  },
+  "reporting": {
+    "min_stage_dv_mps": 200
+  }
+}
+```
 
 ## Benchmark
 
 Run a benchmark and emit JSON with the git head for easy comparisons:
 
 ```
-MultistageOptimizer.exe --benchmark --benchmark-config config/benchmark.json --benchmark-threads 1 --benchmark-iterations 3
+MultistageOptimizer.exe --benchmark --benchmark-config config/benchmark_ci.json --benchmark-threads 1 --benchmark-iterations 3
 ```
+
+You can point `--benchmark-config` at any config file (including ones that enable `zoom`, `maxCombinations`, etc.). CI uses `config/benchmark_ci.json` as a stable performance regression check.
+
+Benchmark JSON output includes:
+- `min_mass`
+- `best_distribution_units` (discretized deltaV units per stage)
+- `best_distribution_dv_mps` (derived deltaV per stage)
+
+### Strategy compare wrapper
+
+Run multiple strategies derived from the same config (full-grid baseline, zoom, budget variants) and print a combined JSON report:
+
+```
+MultistageOptimizer.exe --benchmark-compare --benchmark-config config/benchmark.json --benchmark-threads 1 --benchmark-iterations 3
+```
+
+For a human-friendly side-by-side view, use:
+
+```
+MultistageOptimizer.exe --benchmark-compare --benchmark-compare-format table --benchmark-config config/benchmark.json --benchmark-threads 1 --benchmark-iterations 3
+```
+
+**Strategies**
+
+The compare wrapper derives strategies from the same config:
+
+- `full_grid` (baseline): brute-force evaluate *all* distributions at the baseline precision, with `zoom`, `maxCombinations`, and `targetSeconds` removed.
+  - If `zoom.enabled=true`, the baseline precision is `zoom.fine_precision` (not `precision`) so it compares against the final-resolution result; this can exceed `maxRAM` for many-stage rockets.
+- `zoom`: two-pass search: full-grid at `zoom.coarse_precision`, then refine around the best `zoom.top_k` coarse candidates in a window of `zoom.window_coarse_steps` (converted to fine units) at `zoom.fine_precision`. Budgets are removed.
+- `budget_full`: full-grid search with runtime budgets enabled (`maxCombinations` or `targetSeconds`), and `zoom` removed.
+  - The program chooses the largest precision that fits the budget (and within `maxRAM`), which can be *higher* than `precision`.
+- `budget_zoom`: zoom search with runtime budgets enabled.
+  - The coarse pass uses ~70% of the budget; the refinement radius may be reduced to stay within the remaining budget.
+
+If the baseline `full_grid` fails (usually due to RAM), comparisons are omitted and the output includes a note explaining why.
 
 Use `--benchmark-max-seconds <sec>` to fail the run if the average total time exceeds the limit (this is what CI uses).
 Benchmark runs also append a CSV row to `benchmark_results.csv` (override with `--benchmark-csv <path>`).
