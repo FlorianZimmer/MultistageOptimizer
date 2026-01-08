@@ -348,3 +348,8 @@ MigrationBackup/
 
 # Ionide (cross platform F# VS Code tools) working folder
 .ionide/
+
+# repomix artifacts
+repomix/work/
+.repomix_bridge/ # legacy (migrated to repomix/work/)
+repomix-bridge.xml

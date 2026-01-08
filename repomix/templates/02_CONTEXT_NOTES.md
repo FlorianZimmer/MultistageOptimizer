@@ -1,3 +1,3 @@
-CONTEXT_NOTES:
+CONTEXT_NOTES (optional):
 
 <<optional: paste small, high-signal snippets here (docs/web), keep it short>>
