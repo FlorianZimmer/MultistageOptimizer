@@ -353,3 +353,4 @@ MigrationBackup/
 repomix/work/
 .repomix_bridge/ # legacy (migrated to repomix/work/)
 repomix-bridge.xml
+repomix.xml

@@ -40,6 +40,7 @@ Workflow:
 1) Copy templates into `repomix/work/`
 2) Edit `repomix/work/01_REQUEST.md` (+ optional `repomix/work/02_CONTEXT_NOTES.md`)
 3) Run Repomix including `repomix/work/**` so the browser model receives the instruction contract + request
+4) Always write the packed output into `repomix/work/outputs/` (this folder is gitignored / untracked by design)
 
 ## Tools you can use
 - Repomix CLI: `npx repomix@latest ...`
@@ -85,8 +86,9 @@ Use ripgrep to find the relevant code, then include those files + their dependen
 Copy templates into `repomix/work/` and edit the request:
 
 1) `mkdir -p repomix/work && cp -R repomix/templates/. repomix/work/`
-2) Edit `repomix/work/01_REQUEST.md`
-3) Optionally edit `repomix/work/02_CONTEXT_NOTES.md`
+2) `mkdir -p repomix/work/outputs`
+3) Edit `repomix/work/01_REQUEST.md`
+4) Optionally edit `repomix/work/02_CONTEXT_NOTES.md`
 
 ## Step 2 — Run repomix to generate ONE packed file
 Default: XML output.
@@ -95,14 +97,14 @@ Default: XML output.
 Start with focused include patterns. Keep **full file contents** by default (no compression) so the browser model can reason about exact logic and comments.
 
 - First attempt (focused, full contents):
-  `npx repomix@latest . --style xml --no-gitignore --output repomix-bridge.xml --include "<PATTERNS>"`
+  `npx repomix@latest . --style xml --no-gitignore --output repomix/work/outputs/repomix-bridge.xml --include "<PATTERNS>"`
 
 > Keep comments by default. Do **not** pass `--remove-comments` unless the user explicitly requests it.
 
 > `--compress` is **not** the default: it extracts a structural summary (classes/functions) and can remove implementation details that matter for debugging and logic reviews. Only use it as a last resort to get under the token budget.
 
 ### If REPO_TARGET is remote
-`npx repomix@latest --remote <owner/repo or url> --style xml --output repomix-bridge.xml --include "<PATTERNS>"`
+`npx repomix@latest --remote <owner/repo or url> --style xml --output repomix/work/outputs/repomix-bridge.xml --include "<PATTERNS>"`
 
 ### Always include the bridge instruction files
 Make sure `<PATTERNS>` includes:
@@ -113,7 +115,7 @@ Make sure `<PATTERNS>` includes:
 > Note: `repomix/work/` is gitignored. Always pass `--no-gitignore` or the request/instruction files may be silently excluded.
 
 Sanity check (after packing): confirm the output contains `repomix/work/01_REQUEST.md`:
-- `rg -n "file path=\\"repomix/work/01_REQUEST\\.md\\"" repomix-bridge.xml`
+- `rg -n "file path=\\"repomix/work/01_REQUEST\\.md\\"" repomix/work/outputs/repomix-bridge.xml`
 
 ## Step 3 — Token budget enforcement loop (must)
 After each repomix run, read the printed token estimate.
@@ -140,7 +142,7 @@ Return in this exact shape:
    - command used
    - token estimate
    - what was included (high level)
-   - output filename
+   - output filename (must live under `repomix/work/outputs/`)
 2) Stop. Do **not** paste XML into chat.
    - The packed context lives in the output file; the user can open it and copy/paste its contents into the browser model.
    - No second file.
