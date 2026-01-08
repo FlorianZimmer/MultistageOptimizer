@@ -6,10 +6,11 @@
   "enginesPath": "config/engines.json",
   "rocketPath": "config/rocket_8stage.json",
   "maxCombinations": 5000000,
+  "maxCombinationsCuda": 5000000000,
   "zoom": {
     "enabled": true,
-    "fine_precision": 120,
-    "coarse_precision": 60,
+    "fine_precision": 50,
+    "coarse_precision": 25,
     "window_coarse_steps": 2,
     "top_k": 3
   },

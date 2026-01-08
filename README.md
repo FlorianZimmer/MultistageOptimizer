@@ -16,6 +16,10 @@ Options can be found in config/config.json.
 
 - `useMultiCore`: if program should utilize all available cores.
 - `fullGridMode`: how the full-grid solver iterates distributions: `materialize` (default) or `streaming` (generate on the fly, avoids a giant `distributions` table; useful groundwork for GPU work but can be slower on CPU).
+- `backend`: compute backend: `auto` (default), `cpu`, or `cuda`.
+  - `auto` tries to load the CUDA plugin and falls back to CPU automatically if unavailable.
+- `backendPath`: optional backend plugin path (file or directory). If not set, search order is: `MSO_BACKEND_PATH`, `<exe_dir>/backends/`, `<exe_dir>/`.
+- `gpuDevice`: optional GPU device id (default: 0, `-1` lets the backend pick a default).
 - `precision`: the number of discretization steps used to split total deltaV across stages (1..255).
   - Example (2 stages, precision 150): stage split candidates include `1/150` + `149/150`, `2/150` + `148/150`, ...
 - `maxRAM`: maximum allowed RAM usage in bytes. Supports human-readable values like `16GB` (base 1024).
@@ -26,8 +30,10 @@ Options can be found in config/config.json.
 ### Runtime budgets
 
 - `maxCombinations`: deterministic *work* budget. If set, the program chooses the largest precision that keeps the number of evaluated distributions `<= maxCombinations` (and within `maxRAM`).
+- `maxCombinationsCpu` / `maxCombinationsCuda`: optional per-backend overrides (when present, they take precedence over `maxCombinations`).
 - With `zoom.enabled=true`, `maxCombinations` applies to the total work across both passes (coarse + refined). The current default split is ~70% coarse, remainder refined (the refinement radius may be reduced to stay within budget).
 - `targetSeconds`: best-effort runtime target. If set (and `maxCombinations` is not set), the program runs a short calibration and derives a `maxCombinations` budget from it.
+- `targetSecondsCpu` / `targetSecondsCuda`: optional per-backend overrides (when present, they take precedence over `targetSeconds`).
   - Note: `targetSeconds` is not deterministic across different machines (and can vary slightly even on the same machine).
 
 ### Zoom refinement (coarse-to-fine)
@@ -102,7 +108,7 @@ MultistageOptimizer.exe --benchmark-compare --benchmark-compare-format table --b
 
 The compare wrapper derives strategies from the same config:
 
-- `full_grid` (baseline): brute-force evaluate *all* distributions at the baseline precision, with `zoom`, `maxCombinations`, and `targetSeconds` removed.
+- `full_grid` (baseline): brute-force evaluate *all* distributions at the baseline precision, with `zoom` and runtime budgets removed.
   - If `zoom.enabled=true`, the baseline precision is `zoom.fine_precision` (not `precision`) so it compares against the final-resolution result; this can exceed `maxRAM` for many-stage rockets.
 - `zoom`: two-pass search: full-grid at `zoom.coarse_precision`, then refine around the best `zoom.top_k` coarse candidates in a window of `zoom.window_coarse_steps` (converted to fine units) at `zoom.fine_precision`. Budgets are removed.
 - `budget_full`: full-grid search with runtime budgets enabled (`maxCombinations` or `targetSeconds`), and `zoom` removed.
@@ -128,12 +134,16 @@ Benchmark runs also append a CSV row to `benchmark_results.csv` (override with `
     - `cmake -S . -B build -G "Visual Studio 17 2022" -A x64`
     - `cmake --build build --config Release`
     - tests: `ctest --test-dir build -C Release --output-on-failure`
-    - exe: `build/Release/MultistageOptimizer.exe`
+    - exe: `build/bin/MultistageOptimizer.exe`
   - Ninja (faster incremental builds):
     - `cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release`
     - `cmake --build build`
     - tests: `ctest --test-dir build --output-on-failure`
-    - exe: `build/MultistageOptimizer.exe`
+    - exe: `build/bin/MultistageOptimizer.exe`
+
+- CUDA plugin (optional):
+  - Configure with `-DMSO_BUILD_CUDA_BACKEND=ON` (default) and ensure `mso_backend_cuda` ends up next to the executable (or in `backends/`).
+  - Control codegen via `-DMSO_CUDA_ARCHITECTURES=native` (or e.g. `86;90`, `all-major`).
 
 - Manual build (no CMake):
   - clang++ (quick build, no IDE):
@@ -155,13 +165,26 @@ You can try out what what number of distributions exist here: https://www.calcul
 
 ## GPU acceleration (OpenCL/CUDA/ROCm)
 
-The performance hotspot is evaluating the rocket mass for each deltaV distribution, which is embarrassingly parallel. That makes it a good *candidate* for GPU acceleration, but there’s a catch: the current full-grid solver first materializes the full `distributions` table on the CPU (`createTuple`). Offloading only the mass loop to a GPU would typically require copying `n_combinations * stages` bytes to the device (often hundreds of MB), which can wipe out most of the speedup on PCIe.
+The performance hotspot is evaluating the rocket mass for each deltaV distribution, which is embarrassingly parallel. The CUDA backend avoids materializing/transferring the full `distributions` table by enumerating distributions on the device (index → composition unranking), evaluating mass in-kernel, and reducing to the best candidate.
 
-To get a meaningful GPU win, the solver generally needs to avoid building/transferring the full table and instead:
-- Enumerate distributions on the device (composition generator or “index → composition” unranking) and compute mass in-kernel.
-- Reduce on-device to the best mass/index (or top-k for zoom) and return only a few candidates to the CPU.
+### Optional plugin backends (llama.cpp-style)
 
-For CPU execution, materializing the distribution table can still be faster (it’s mostly a big sequential memory write, and keeps per-evaluation overhead low). The codebase includes both approaches: `optimizer::FullGridMode::Materialize` (default) and `optimizer::FullGridMode::Streaming` (on-the-fly generation, useful as a starting point for a GPU backend).
+The main executable is CPU-only and can load optional GPU plugins at runtime.
+
+Currently implemented:
+- `mso_backend_cuda` (NVIDIA CUDA)
+
+Select via config (`backend`) or CLI (`--backend auto|cpu|cuda`). `auto` tries CUDA and falls back to CPU if the plugin can’t be loaded or no CUDA device is present.
+
+Plugin search order:
+1) `backendPath` / `--backend-path` (file or directory)
+2) `MSO_BACKEND_PATH`
+3) `<exe_dir>/backends/`
+4) `<exe_dir>/`
+
+Note: the CUDA backend is currently used only for non-zoom full-grid runs.
+
+For CPU execution, materializing the distribution table can still be faster (it's mostly a big sequential memory write, and keeps per-evaluation overhead low). The codebase includes both approaches: `optimizer::FullGridMode::Materialize` (default) and `optimizer::FullGridMode::Streaming` (on-the-fly generation, useful as a starting point for a GPU backend).
 
 If you want to go down that route, OpenCL is the most portable single-backend option (works across NVIDIA/AMD/Intel), while CUDA/ROCm can be added as vendor-specific backends later.
 

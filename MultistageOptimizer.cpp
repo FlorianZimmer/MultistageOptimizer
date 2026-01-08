@@ -50,10 +50,13 @@ Legacy changelog (pre-continuous releases):
 #include "math/math.hpp"
 #include "math/massCalc.hpp"
 #include "math/validation.hpp"
+#include "backend/backend_loader.hpp"
+#include "backend/full_grid_problem.hpp"
 #include "optimizer/budget.hpp"
 #include "optimizer/solver.hpp"
 #include "optimizer/reporting.hpp"
 #include "read_json/read_json.hpp"
+#include "util/budget_config.hpp"
 #include "util/config_parsing.hpp"
 #include "util/format_numbers.hpp"
 #include "util/text_table.hpp"
@@ -153,6 +156,9 @@ struct RunOptions {
     bool force_verbose_off = false;
     int threads_override = 0;
     string full_grid_mode_override;
+    string backend_override;
+    string backend_path_override;
+    int gpu_device_override = std::numeric_limits<int>::min();
 };
 
 struct ProgramOptions {
@@ -165,6 +171,9 @@ struct ProgramOptions {
     string benchmark_compare_format = "json";
     string benchmark_csv_path = "benchmark_results.csv";
     string full_grid_mode_override;
+    string backend_override;
+    string backend_path_override;
+    int gpu_device_override = std::numeric_limits<int>::min();
     bool no_prompt = false;
     bool show_help = false;
     string config_path = "config/config.json";
@@ -416,6 +425,9 @@ static void printUsage()
     std::cout << "\n";
     std::cout << "Options:\n";
     std::cout << "  --config <path>                 Config file for normal runs.\n";
+    std::cout << "  --backend <mode>                Backend: auto|cpu|cuda|rocm (default: auto).\n";
+    std::cout << "  --backend-path <path>           Backend plugin path (file or directory).\n";
+    std::cout << "  --gpu-device <id>               GPU device id (default: 0).\n";
     std::cout << "  --no-prompt                      Skip waiting for Enter before exit.\n";
     std::cout << "  --benchmark                      Run performance benchmark.\n";
     std::cout << "  --benchmark-compare              Run multiple benchmark strategies and compare.\n";
@@ -444,6 +456,38 @@ static bool parseOptions(int argc, char** argv, ProgramOptions& options)
                 return false;
             }
             options.config_path = argv[++i];
+        }
+        else if (arg == "--backend") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value for --backend.\n";
+                return false;
+            }
+            std::string value = argv[++i];
+            backend::Mode parsed = backend::Mode::Auto;
+            if (!backend::parseMode(value, parsed)) {
+                std::cerr << "Invalid --backend value (expected auto|cpu|cuda|rocm).\n";
+                return false;
+            }
+            options.backend_override = value;
+        }
+        else if (arg == "--backend-path") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value for --backend-path.\n";
+                return false;
+            }
+            options.backend_path_override = argv[++i];
+        }
+        else if (arg == "--gpu-device") {
+            if (i + 1 >= argc) {
+                std::cerr << "Missing value for --gpu-device.\n";
+                return false;
+            }
+            int value = 0;
+            if (!parseInt(argv[++i], value) || value < -1) {
+                std::cerr << "Invalid --gpu-device value.\n";
+                return false;
+            }
+            options.gpu_device_override = value;
         }
         else if (arg == "--no-prompt") {
             options.no_prompt = true;
@@ -623,6 +667,68 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         }
     }
 
+    backend::Request backend_request;
+    backend_request.mode = backend::Mode::Auto;
+    backend_request.backend_path.clear();
+    backend_request.device_id = -1;
+
+    if (config.contains("backend")) {
+        if (!config["backend"].is_string()) {
+            std::cerr << "Invalid backend value in config.\n";
+            setError("Invalid backend value in config.");
+            return false;
+        }
+        std::string mode = config["backend"].get<std::string>();
+        if (!backend::parseMode(mode, backend_request.mode)) {
+            std::cerr << "Invalid backend value in config (expected auto|cpu|cuda|rocm).\n";
+            setError("Invalid backend value in config.");
+            return false;
+        }
+    }
+    if (config.contains("backendPath")) {
+        if (!config["backendPath"].is_string()) {
+            std::cerr << "Invalid backendPath value in config.\n";
+            setError("Invalid backendPath value in config.");
+            return false;
+        }
+        backend_request.backend_path = config["backendPath"].get<std::string>();
+    }
+    if (config.contains("gpuDevice")) {
+        if (!config["gpuDevice"].is_number_integer()) {
+            std::cerr << "Invalid gpuDevice value in config.\n";
+            setError("Invalid gpuDevice value in config.");
+            return false;
+        }
+        int device = config["gpuDevice"].get<int>();
+        if (device < -1) {
+            std::cerr << "Invalid gpuDevice value in config.\n";
+            setError("Invalid gpuDevice value in config.");
+            return false;
+        }
+        backend_request.device_id = device;
+    }
+
+    if (!options.backend_override.empty()) {
+        backend::Mode parsed = backend::Mode::Auto;
+        if (!backend::parseMode(options.backend_override, parsed)) {
+            std::cerr << "Invalid --backend value (expected auto|cpu|cuda|rocm).\n";
+            setError("Invalid --backend value.");
+            return false;
+        }
+        backend_request.mode = parsed;
+    }
+    if (!options.backend_path_override.empty()) {
+        backend_request.backend_path = options.backend_path_override;
+    }
+    if (options.gpu_device_override != std::numeric_limits<int>::min()) {
+        if (options.gpu_device_override < -1) {
+            std::cerr << "Invalid --gpu-device value.\n";
+            setError("Invalid --gpu-device value.");
+            return false;
+        }
+        backend_request.device_id = options.gpu_device_override;
+    }
+
     bool useMultiCore = false;
     if (config.contains("useMultiCore")) {
         if (!config["useMultiCore"].is_boolean()) {
@@ -729,10 +835,39 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         }
     }
 
+    backend::ResolvedBackend resolved_backend;
+    std::string backend_error;
+    if (zoom_enabled) {
+        if (backend_request.mode == backend::Mode::Cuda) {
+            std::cerr << "CUDA backend currently supports full-grid runs only (zoom is CPU-only for now).\n";
+            setError("CUDA backend currently supports full-grid runs only (zoom is CPU-only for now).");
+            return false;
+        }
+        if (backend_request.mode == backend::Mode::Rocm) {
+            std::cerr << "ROCm backend not implemented yet.\n";
+            setError("ROCm backend not implemented yet.");
+            return false;
+        }
+        resolved_backend.mode = backend::Mode::Cpu;
+    }
+    else {
+        if (!backend::resolve(backend_request, resolved_backend, backend_error)) {
+            std::cerr << backend_error << "\n";
+            setError(backend_error);
+            return false;
+        }
+    }
+
+    const bool using_cuda_backend =
+        (!zoom_enabled && resolved_backend.mode == backend::Mode::Cuda && resolved_backend.plugin.has_value() && resolved_backend.plugin->loaded());
+    const bool effective_streaming_mode =
+        (full_grid_mode == optimizer::FullGridMode::Streaming) || using_cuda_backend;
+
     std::uint64_t max_combinations_budget = 0;
-    if (config.contains("maxCombinations")) {
+    util::BudgetBackend budget_backend = using_cuda_backend ? util::BudgetBackend::Cuda : util::BudgetBackend::Cpu;
+    if (const auto* selected = util::selectBudgetValue(config, budget_backend, "maxCombinations")) {
         std::uint64_t parsed = 0;
-        if (!parseUInt64Json(config["maxCombinations"], parsed) || parsed == 0) {
+        if (!parseUInt64Json(*selected, parsed) || parsed == 0) {
             std::cerr << "Invalid maxCombinations value in config.\n";
             setError("Invalid maxCombinations value in config.");
             return false;
@@ -741,75 +876,78 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     }
 
     double target_seconds = -1.0;
-    if (max_combinations_budget == 0 && config.contains("targetSeconds")) {
-        if (!config["targetSeconds"].is_number()) {
-            std::cerr << "Invalid targetSeconds value in config.\n";
-            setError("Invalid targetSeconds value in config.");
-            return false;
-        }
-        target_seconds = config["targetSeconds"].get<double>();
-        if (!std::isfinite(target_seconds) || target_seconds <= 0.0) {
-            std::cerr << "Invalid targetSeconds value in config.\n";
-            setError("Invalid targetSeconds value in config.");
-            return false;
-        }
-
-        int calib_precision = precision;
-        if (zoom_enabled && zoom_has_fine_precision && zoom_options.fine_precision > 0) {
-            calib_precision = zoom_options.fine_precision;
-        }
-        calib_precision = std::clamp(calib_precision, static_cast<int>(stage_count), 255);
-        std::uint64_t calib_total = nCr(calib_precision - 1, static_cast<int>(stage_count) - 1);
-        if (calib_total == 0) {
-            std::cerr << "Unable to calibrate runtime (invalid precision/stages).\n";
-            setError("Unable to calibrate runtime (invalid precision/stages).");
-            return false;
-        }
-        std::uint64_t sample = std::min<std::uint64_t>(5000, calib_total);
-
-        std::vector<unsigned char> dist(sample * stage_count, 1);
-        std::uint64_t gen = createTuple(dist.data(), stage_count, sample, calib_precision);
-        if (gen != sample) {
-            std::cerr << "Unable to calibrate runtime (tuple generation failed).\n";
-            setError("Unable to calibrate runtime (tuple generation failed).");
-            return false;
-        }
-        std::vector<double> masses(sample, 0.0);
-        auto calib_start = Clock::now();
-        if (nThreads == 1) {
-            distMass(false, 0, sample, sample, rocket, masses.data(), dist.data(), calib_precision);
-        }
-        else {
-            std::uint64_t threadBlock = sample / static_cast<std::uint64_t>(nThreads);
-            std::vector<std::thread> threads;
-            threads.reserve(static_cast<std::size_t>(nThreads));
-            for (int t = 0; t < nThreads; t++) {
-                std::uint64_t begin = static_cast<std::uint64_t>(t) * threadBlock;
-                std::uint64_t end = (t == nThreads - 1) ? sample : begin + threadBlock;
-                threads.push_back(std::thread([begin, end, sample, &rocket, &masses, &dist, calib_precision] {
-                    distMass(false, begin, end, sample, rocket, masses.data(), dist.data(), calib_precision);
-                }));
+    if (max_combinations_budget == 0) {
+        const auto* selected = util::selectBudgetValue(config, budget_backend, "targetSeconds");
+        if (selected) {
+            if (!selected->is_number()) {
+                std::cerr << "Invalid targetSeconds value in config.\n";
+                setError("Invalid targetSeconds value in config.");
+                return false;
             }
-            for (auto& th : threads) {
-                th.join();
+            target_seconds = selected->get<double>();
+            if (!std::isfinite(target_seconds) || target_seconds <= 0.0) {
+                std::cerr << "Invalid targetSeconds value in config.\n";
+                setError("Invalid targetSeconds value in config.");
+                return false;
             }
-        }
-        auto calib_end = Clock::now();
-        double secs = elapsedSeconds(calib_start, calib_end);
-        if (!std::isfinite(secs) || secs <= 0.0) {
-            std::cerr << "Unable to calibrate runtime (timing failed).\n";
-            setError("Unable to calibrate runtime (timing failed).");
-            return false;
-        }
-        double combos_per_sec = static_cast<double>(sample) / secs;
-        std::uint64_t estimated = static_cast<std::uint64_t>(std::floor(target_seconds * combos_per_sec));
-        if (estimated == 0) {
-            estimated = 1;
-        }
-        max_combinations_budget = estimated;
-        if (options.print_output) {
-            std::cout << "Calibration: " << combos_per_sec << " combos/sec (" << sample << " samples, precision " << calib_precision << ", threads " << nThreads << ")\n";
-            std::cout << "TargetSeconds: " << target_seconds << " => maxCombinations=" << max_combinations_budget << "\n\n";
+
+            int calib_precision = precision;
+            if (zoom_enabled && zoom_has_fine_precision && zoom_options.fine_precision > 0) {
+                calib_precision = zoom_options.fine_precision;
+            }
+            calib_precision = std::clamp(calib_precision, static_cast<int>(stage_count), 255);
+            std::uint64_t calib_total = nCr(calib_precision - 1, static_cast<int>(stage_count) - 1);
+            if (calib_total == 0) {
+                std::cerr << "Unable to calibrate runtime (invalid precision/stages).\n";
+                setError("Unable to calibrate runtime (invalid precision/stages).");
+                return false;
+            }
+            std::uint64_t sample = std::min<std::uint64_t>(5000, calib_total);
+
+            std::vector<unsigned char> dist(sample * stage_count, 1);
+            std::uint64_t gen = createTuple(dist.data(), stage_count, sample, calib_precision);
+            if (gen != sample) {
+                std::cerr << "Unable to calibrate runtime (tuple generation failed).\n";
+                setError("Unable to calibrate runtime (tuple generation failed).");
+                return false;
+            }
+            std::vector<double> masses(sample, 0.0);
+            auto calib_start = Clock::now();
+            if (nThreads == 1) {
+                distMass(false, 0, sample, sample, rocket, masses.data(), dist.data(), calib_precision);
+            }
+            else {
+                std::uint64_t threadBlock = sample / static_cast<std::uint64_t>(nThreads);
+                std::vector<std::thread> threads;
+                threads.reserve(static_cast<std::size_t>(nThreads));
+                for (int t = 0; t < nThreads; t++) {
+                    std::uint64_t begin = static_cast<std::uint64_t>(t) * threadBlock;
+                    std::uint64_t end = (t == nThreads - 1) ? sample : begin + threadBlock;
+                    threads.push_back(std::thread([begin, end, sample, &rocket, &masses, &dist, calib_precision] {
+                        distMass(false, begin, end, sample, rocket, masses.data(), dist.data(), calib_precision);
+                    }));
+                }
+                for (auto& th : threads) {
+                    th.join();
+                }
+            }
+            auto calib_end = Clock::now();
+            double secs = elapsedSeconds(calib_start, calib_end);
+            if (!std::isfinite(secs) || secs <= 0.0) {
+                std::cerr << "Unable to calibrate runtime (timing failed).\n";
+                setError("Unable to calibrate runtime (timing failed).");
+                return false;
+            }
+            double combos_per_sec = static_cast<double>(sample) / secs;
+            std::uint64_t estimated = static_cast<std::uint64_t>(std::floor(target_seconds * combos_per_sec));
+            if (estimated == 0) {
+                estimated = 1;
+            }
+            max_combinations_budget = estimated;
+            if (options.print_output) {
+                std::cout << "Calibration: " << combos_per_sec << " combos/sec (" << sample << " samples, precision " << calib_precision << ", threads " << nThreads << ")\n";
+                std::cout << "TargetSeconds: " << target_seconds << " => maxCombinations=" << max_combinations_budget << "\n\n";
+            }
         }
     }
 
@@ -831,7 +969,7 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     if (max_combinations_budget > 0) {
         if (!zoom_enabled) {
             int chosen =
-                (full_grid_mode == optimizer::FullGridMode::Streaming)
+                (effective_streaming_mode)
                     ? optimizer::choosePrecisionForMaxCombinationsStreaming(static_cast<int>(stage_count),
                                                                             max_combinations_budget,
                                                                             maxRAM,
@@ -853,7 +991,7 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         else {
             const std::uint64_t coarse_budget = std::max<std::uint64_t>(1, static_cast<std::uint64_t>(std::floor(static_cast<double>(max_combinations_budget) * 0.7)));
             int coarse_cap =
-                (full_grid_mode == optimizer::FullGridMode::Streaming)
+                (effective_streaming_mode)
                     ? optimizer::choosePrecisionForMaxCombinationsStreaming(static_cast<int>(stage_count),
                                                                             coarse_budget,
                                                                             maxRAM,
@@ -901,13 +1039,13 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     }
 
     unsigned long long coarse_required =
-        (full_grid_mode == optimizer::FullGridMode::Streaming)
+        (effective_streaming_mode)
             ? requiredBytesForPrecisionStreaming(coarse_precision, static_cast<int>(stage_count), sizeof(MassType))
             : requiredBytesForPrecision(coarse_precision, static_cast<int>(stage_count), sizeof(MassType));
     if (!zoom_enabled) {
         if (coarse_required >= maxRAM) {
             int max_prec =
-                (full_grid_mode == optimizer::FullGridMode::Streaming)
+                (effective_streaming_mode)
                     ? calcMaxPrecUpStreaming(coarse_precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType))
                     : calcMaxPrecUp(coarse_precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType));
             std::cerr << "Precision too high for the amount of stages and maxRAM.\n";
@@ -924,7 +1062,7 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     else {
         if (coarse_required >= maxRAM) {
             int max_prec =
-                (full_grid_mode == optimizer::FullGridMode::Streaming)
+                (effective_streaming_mode)
                     ? calcMaxPrecUpStreaming(coarse_precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType))
                     : calcMaxPrecUp(coarse_precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType));
             std::cerr << "Zoom coarse_precision too high for the amount of stages and maxRAM.\n";
@@ -941,7 +1079,7 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
 
     if (options.print_output) {
         std::cout << "For the number of stages and RAM currently given, the maximum precision can be raised to: "
-                  << ((full_grid_mode == optimizer::FullGridMode::Streaming)
+                  << ((effective_streaming_mode)
                           ? calcMaxPrecDownStreaming(255, static_cast<int>(stage_count), maxRAM, sizeof(MassType))
                           : calcMaxPrecDown(255, static_cast<int>(stage_count), maxRAM, sizeof(MassType)))
                   << "\n\n";
@@ -969,18 +1107,93 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         else {
             cout << "using 1 thread\n";
         }
+        if (zoom_enabled) {
+            std::cout << "backend: cpu (zoom)\n";
+        }
+        else {
+            if (using_cuda_backend) {
+                std::cout << "backend: cuda";
+                if (!resolved_backend.loaded_path.empty()) {
+                    std::cout << " (" << resolved_backend.loaded_path.string() << ")";
+                }
+                std::cout << "\n";
+            }
+            else {
+                std::cout << "backend: cpu";
+                if (backend_request.mode == backend::Mode::Auto && !resolved_backend.warning.empty()) {
+                    std::cout << " (auto fallback)";
+                }
+                std::cout << "\n";
+            }
+        }
     }
 
     if (!zoom_enabled) {
-        optimizer::FullGridResult solve = optimizer::solveFullGrid(rocket, effective_precision, verbose, nThreads, 1, full_grid_mode);
-        min = solve.best_mass;
-        index = static_cast<long long>(solve.best_index);
-        bestDistro = solve.best_units;
-        timings.fill_seconds = solve.timings.fill_seconds;
-        timings.tuple_seconds = solve.timings.tuple_seconds;
-        timings.mass_seconds = solve.timings.mass_seconds;
-        timings.min_seconds = solve.timings.min_seconds;
-        summary.n_combinations = solve.combinations;
+        bool ran_backend = false;
+        if (using_cuda_backend && resolved_backend.plugin.has_value()) {
+            backend::FullGridProblemStorage storage;
+            if (!storage.build(rocket, effective_precision)) {
+                std::cerr << "Failed to build evaluation tables for backend.\n";
+                setError("Failed to build evaluation tables for backend.");
+                return false;
+            }
+
+            std::vector<std::uint8_t> best_units_u8(stage_count, 0);
+            mso_full_grid_solution sol{};
+            sol.best_mass = std::numeric_limits<double>::infinity();
+            sol.best_index = 0;
+            sol.best_units = best_units_u8.data();
+            sol.best_units_len = static_cast<std::uint32_t>(best_units_u8.size());
+
+            std::string plugin_error;
+            auto backend_start = Clock::now();
+            mso_status st = resolved_backend.plugin->solveFullGridMin(storage.problem, sol, plugin_error);
+            auto backend_end = Clock::now();
+
+            if (st == MSO_STATUS_OK) {
+                ran_backend = true;
+                min = static_cast<MassType>(sol.best_mass);
+                if (sol.best_index > static_cast<std::uint64_t>(std::numeric_limits<long long>::max())) {
+                    index = -1;
+                }
+                else {
+                    index = static_cast<long long>(sol.best_index);
+                }
+                bestDistro.assign(stage_count, 0);
+                for (std::size_t i = 0; i < stage_count; i++) {
+                    bestDistro[i] = static_cast<unsigned char>(best_units_u8[i]);
+                }
+                timings.fill_seconds = 0.0;
+                timings.tuple_seconds = 0.0;
+                timings.mass_seconds = elapsedSeconds(backend_start, backend_end);
+                timings.min_seconds = 0.0;
+                summary.n_combinations = storage.problem.combinations;
+            }
+            else if (backend_request.mode != backend::Mode::Auto) {
+                std::cerr << "CUDA backend failed: " << plugin_error << "\n";
+                setError("CUDA backend failed: " + plugin_error);
+                return false;
+            }
+            else if (options.print_output) {
+                std::cerr << "Warning: CUDA backend failed (" << plugin_error << "); falling back to CPU.\n";
+            }
+        }
+
+        if (!ran_backend) {
+            optimizer::FullGridMode cpu_mode = full_grid_mode;
+            if (cpu_mode == optimizer::FullGridMode::Materialize && effective_streaming_mode) {
+                cpu_mode = optimizer::FullGridMode::Streaming;
+            }
+            optimizer::FullGridResult solve = optimizer::solveFullGrid(rocket, effective_precision, verbose, nThreads, 1, cpu_mode);
+            min = solve.best_mass;
+            index = static_cast<long long>(solve.best_index);
+            bestDistro = solve.best_units;
+            timings.fill_seconds = solve.timings.fill_seconds;
+            timings.tuple_seconds = solve.timings.tuple_seconds;
+            timings.mass_seconds = solve.timings.mass_seconds;
+            timings.min_seconds = solve.timings.min_seconds;
+            summary.n_combinations = solve.combinations;
+        }
     }
     else {
         zoom_options.coarse_precision = coarse_precision;
@@ -1208,6 +1421,9 @@ static int runBenchmark(const json& config, const ProgramOptions& options, const
     run_options.force_verbose_off = true;
     run_options.threads_override = options.benchmark_threads;
     run_options.full_grid_mode_override = options.full_grid_mode_override;
+    run_options.backend_override = options.backend_override;
+    run_options.backend_path_override = options.backend_path_override;
+    run_options.gpu_device_override = options.gpu_device_override;
 
     OptimizationSummary summary;
     for (int i = 0; i < options.benchmark_warmup; i++) {
@@ -1320,6 +1536,9 @@ static bool runStrategyBenchmark(const std::string& name,
     run_options.force_verbose_off = true;
     run_options.threads_override = options.benchmark_threads;
     run_options.full_grid_mode_override = options.full_grid_mode_override;
+    run_options.backend_override = options.backend_override;
+    run_options.backend_path_override = options.backend_path_override;
+    run_options.gpu_device_override = options.gpu_device_override;
 
     for (int i = 0; i < options.benchmark_warmup; i++) {
         OptimizationSummary warmup_summary;
@@ -1667,15 +1886,14 @@ static int runBenchmarkCompare(const json& base_config, const ProgramOptions& op
         std::cerr << baseline_note << "\n";
     }
 
-    bool has_budget = config.contains("maxCombinations") || config.contains("targetSeconds");
+    bool has_budget = util::hasAnyBudgetKey(config);
 
     std::vector<std::pair<std::string, json>> strategies;
 
     // Baseline: full grid at fine precision, without budgets.
     {
         json cfg = config;
-        cfg.erase("maxCombinations");
-        cfg.erase("targetSeconds");
+        util::eraseBudgetKeys(cfg);
         cfg.erase("zoom");
         if (fine_precision > 0) {
             cfg["precision"] = fine_precision;
@@ -1691,8 +1909,7 @@ static int runBenchmarkCompare(const json& base_config, const ProgramOptions& op
     // Zoom only (no budgets), if zoom is present in the config.
     if (has_zoom) {
         json cfg = config;
-        cfg.erase("maxCombinations");
-        cfg.erase("targetSeconds");
+        util::eraseBudgetKeys(cfg);
         cfg["zoom"]["enabled"] = true;
         if (!cfg["zoom"].contains("fine_precision") || !cfg["zoom"]["fine_precision"].is_number_integer()) {
             cfg["zoom"]["fine_precision"] = fine_precision;
@@ -1863,6 +2080,9 @@ int main(int argc, char** argv)
     run_options.force_verbose_off = false;
     run_options.threads_override = 0;
     run_options.full_grid_mode_override = options.full_grid_mode_override;
+    run_options.backend_override = options.backend_override;
+    run_options.backend_path_override = options.backend_path_override;
+    run_options.gpu_device_override = options.gpu_device_override;
 
     OptimizationSummary summary;
     if (!runOptimization(config, run_options, summary)) {
