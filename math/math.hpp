@@ -1,114 +1,198 @@
 #pragma once
 
-#include <iostream>
+#include <cassert>
+#include <climits>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <numeric>
+#include <vector>
 
 // Returns value of Binomial Coefficient C(n, k)
 // source: https://www.geeksforgeeks.org/space-and-time-efficient-binomial-coefficient/
-unsigned long long nCr(int n, int k)
+inline unsigned long long nCr(int n, int k)
 {
-    unsigned long long res = 1;
+    if (n < 0 || k < 0 || k > n) {
+        return 0;
+    }
 
     // Since C(n, k) = C(n, n-k)
-    if (k > n - k)
+    if (k > n - k) {
         k = n - k;
-
-    // Calculate value of
-    // [n * (n-1) *---* (n-k+1)] / [k * (k-1) *----* 1]
-    for (long long i = 0; i < k; ++i) {
-        res *= (n - i);
-        res /= (i + 1);
     }
 
-    return res;
+    std::uint64_t res = 1;
+    for (int i = 1; i <= k; i++) {
+        std::uint64_t numerator = static_cast<std::uint64_t>(n - (k - i));
+        std::uint64_t denominator = static_cast<std::uint64_t>(i);
+
+        std::uint64_t div = std::gcd(numerator, denominator);
+        numerator /= div;
+        denominator /= div;
+
+        std::uint64_t div2 = std::gcd(res, denominator);
+        res /= div2;
+        denominator /= div2;
+
+        if (denominator != 1) {
+            // Should not happen for binomial coefficients; fall back to clamping.
+            return ULLONG_MAX;
+        }
+        if (numerator != 0 && res > (ULLONG_MAX / numerator)) {
+            return ULLONG_MAX;
+        }
+        res *= numerator;
+    }
+
+    return static_cast<unsigned long long>(res);
 }
 
-//fill Array with all possible combination aka black magic fuckery
-static void createTuple(unsigned char* arr, int sizeX, unsigned long long sizeY, int sum) {
-    int max = sum - sizeX + 1;
-    arr[0 * sizeY + 0] = max;  //arr[column * sizeY + line]
-    for (long i = 1; i < sizeY; i++) {
-        if (arr[sizeX * sizeY] == max) {
-            return;
+// Fill array with all possible positive-integer tuples ("stars and bars").
+// Layout: arr[column * sizeY + row]. Returns the number of generated rows.
+inline std::uint64_t createTuple(unsigned char* arr, std::size_t sizeX, std::uint64_t sizeY, int sum)
+{
+    assert(arr != nullptr);
+    assert(sizeX > 0);
+    assert(sum >= 0);
+
+    if (sizeX == 0) {
+        return 0;
+    }
+
+    if (sum < static_cast<int>(sizeX)) {
+        return 0;
+    }
+
+    if (sum > static_cast<int>(std::numeric_limits<unsigned char>::max())) {
+        return 0;
+    }
+
+    if (sizeX == 1) {
+        if (sizeY < 1) {
+            return 0;
         }
-        //copy previous line to current
-        for (int k = 0; k < sizeX; k++) {
-            arr[k * sizeY + i] = arr[k * sizeY + i - 1];
+        arr[0] = static_cast<unsigned char>(sum);
+        return 1;
+    }
+
+    const int slots = sum - 1;
+    const std::size_t bars_needed = sizeX - 1;
+    if (slots < static_cast<int>(bars_needed)) {
+        return 0;
+    }
+
+    std::vector<int> bars(bars_needed);
+    for (std::size_t i = 0; i < bars_needed; i++) {
+        bars[i] = static_cast<int>(i) + 1;
+    }
+
+    std::uint64_t row = 0;
+    for (;;) {
+        int previous = 0;
+        for (std::size_t col = 0; col < bars_needed; col++) {
+            const int b = bars[col];
+            const int part = b - previous;
+            assert(part >= 1);
+            assert(part <= static_cast<int>(std::numeric_limits<unsigned char>::max()));
+            arr[col * sizeY + row] = static_cast<unsigned char>(part);
+            previous = b;
         }
-        if (arr[0 * sizeY + i - 1] > 1) {
-            arr[0 * sizeY + i] -= 1;
-            arr[1 * sizeY + i] += 1;
+        const int last = sum - previous;
+        assert(last >= 1);
+        assert(last <= static_cast<int>(std::numeric_limits<unsigned char>::max()));
+        arr[bars_needed * sizeY + row] = static_cast<unsigned char>(last);
+
+#ifndef NDEBUG
+        int check_sum = 0;
+        for (std::size_t col = 0; col < sizeX; col++) {
+            check_sum += arr[col * sizeY + row];
+            assert(arr[col * sizeY + row] >= 1);
         }
-        else {
-            int col = 1;
-            while (arr[col * sizeY + i - 1] == 1) {
-                col += 1;
-            }
-            arr[0 * sizeY + i] = arr[col * sizeY + i - 1] - 1;
-            arr[(col + 1) * sizeY + i] = arr[(col + 1) * sizeY + i - 1] + 1;
-            arr[col * sizeY + i] = 1;
+        assert(check_sum == sum);
+#endif
+
+        row++;
+        if (row >= sizeY) {
+            break;
         }
 
-        //print array for line by line. Used for debugging
-        //for (int j = 0; j < sizeX; j++) {
-        //    int sum = 0;
-        //    std::cout << arr[j * sizeY + i] << " ";
-        //    sum += arr[j * sizeY + i];
-        //}
-        //std::cout << sum;
-        //std::cout << "\n";
+        int idx = static_cast<int>(bars_needed) - 1;
+        while (idx >= 0) {
+            const int max_value = slots - (static_cast<int>(bars_needed) - 1 - idx);
+            if (bars[static_cast<std::size_t>(idx)] != max_value) {
+                break;
+            }
+            idx--;
+        }
+        if (idx < 0) {
+            break;
+        }
+        bars[static_cast<std::size_t>(idx)] += 1;
+        for (std::size_t j = static_cast<std::size_t>(idx) + 1; j < bars_needed; j++) {
+            bars[j] = bars[j - 1] + 1;
+        }
     }
+
+    return row;
 }
 
 //Addition function that detects overflow
-unsigned long safeAdd_ULONG(unsigned long lhs, unsigned long rhs)
+inline unsigned long safeAdd_ULONG(unsigned long lhs, unsigned long rhs)
 {
-    if (lhs >= 0) {
-        if (ULONG_MAX - lhs < rhs) {
-            return ULONG_MAX;
-        }
-    }
-    else {
-        if (rhs < ULONG_MAX - lhs) {
-            return ULONG_MAX;
-        }
+    if (ULONG_MAX - lhs < rhs) {
+        return ULONG_MAX;
     }
     return lhs + rhs;
 }
 
-unsigned long long safeMULT_ULLONG(unsigned long long a, unsigned long long b) {
-    unsigned long long x = a * b;
-    if (a != 0 && x / a != b) {
+inline unsigned long long safeAdd_ULLONG(unsigned long long lhs, unsigned long long rhs)
+{
+    if (ULLONG_MAX - lhs < rhs) {
         return ULLONG_MAX;
     }
-    else {
-        return x;
+    return lhs + rhs;
+}
+
+inline unsigned long long safeMULT_ULLONG(unsigned long long a, unsigned long long b)
+{
+    if (a != 0 && b > (ULLONG_MAX / a)) {
+        return ULLONG_MAX;
     }
+    return a * b;
+}
+
+inline unsigned long long requiredBytesForPrecision(int precision, int nStages, std::size_t massTypeSize)
+{
+    unsigned long long combos = nCr(precision - 1, nStages - 1);
+    unsigned long long distributions_bytes = safeMULT_ULLONG(combos, static_cast<unsigned long long>(nStages)); // uint8_t
+    unsigned long long mass_bytes = safeMULT_ULLONG(combos, static_cast<unsigned long long>(massTypeSize));
+    return safeAdd_ULLONG(distributions_bytes, mass_bytes);
 }
 
 //calculate the maximum precision without causing an overflow when creating the array distributions
-int calcMaxPrecUp(int precision, int nStages, unsigned long long maxRAM, unsigned long long nCombinations) {
+inline int calcMaxPrecUp(int precision, int nStages, unsigned long long maxRAM, std::size_t massTypeSize)
+{
     int i = precision;
-    while (safeMULT_ULLONG(nCr(i - 1, nStages - 1), nStages) + (nCr(i - 1, nStages - 1) * sizeof(unsigned long)) >= maxRAM) {
-        unsigned long long temp = safeMULT_ULLONG(nCr(i - 1, nStages - 1), nStages) + (nCr(i - 1, nStages - 1) * sizeof(unsigned long));
+    while (i > 1 && requiredBytesForPrecision(i, nStages, massTypeSize) >= maxRAM) {
         i--;
     }
     return i;
 }
 
 //calculate the maximum precision without causing an overflow when creating the array distributions
-int calcMaxPrecDown(int precision, int nStages, unsigned long long maxRAM, unsigned long long nCombinations) {
+inline int calcMaxPrecDown(int precision, int nStages, unsigned long long maxRAM, std::size_t massTypeSize)
+{
     int i = precision;
-    while (safeMULT_ULLONG(nCr(i - 1, nStages - 1), nStages) + (nCombinations * sizeof(unsigned long)) >= maxRAM) {
-        unsigned long long temp = safeMULT_ULLONG(nCr(i - 1, nStages - 1), nStages) + (nCombinations * sizeof(unsigned long));
+    while (i > 1 && requiredBytesForPrecision(i, nStages, massTypeSize) >= maxRAM) {
         i--;
     }
-    i--;
     return i;
 }
 
-static double* ArrToPerc(double* newArr, unsigned char* arr, int sizeX, int precision) {
+inline double* ArrToPerc(double* newArr, unsigned char* arr, int sizeX, int precision)
+{
     for (int i = 0; i < sizeX; i++) {
-        newArr[i] = ((double)arr[i] / precision) * 100;
+        newArr[i] = (static_cast<double>(arr[i]) / precision) * 100.0;
     }
     return newArr;
 }

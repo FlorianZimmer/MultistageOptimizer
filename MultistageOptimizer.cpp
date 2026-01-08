@@ -20,26 +20,29 @@ Changelog :
 #include <chrono>
 #include <cctype>
 #include <climits>
+#include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
-#include "read_json/json.hpp"
-using json = nlohmann::json;
 
 #include "rocket_definition/Stage.hpp"
 #include "rocket_definition/Engine.hpp"
 #include "rocket_definition/Rocket.hpp"
 #include "math/math.hpp"
 #include "math/massCalc.hpp"
+#include "math/validation.hpp"
 #include "read_json/read_json.hpp"
 
 using namespace std;
+using MassType = double;
 
 struct BenchmarkTimings {
     double fill_seconds = 0.0;
@@ -52,7 +55,7 @@ struct BenchmarkTimings {
 struct OptimizationSummary {
     BenchmarkTimings timings;
     unsigned long long n_combinations = 0;
-    unsigned long min_mass = 0;
+    MassType min_mass = 0.0;
     long long min_index = 0;
     int stage_count = 0;
     int precision = 0;
@@ -519,20 +522,42 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     }
     int precision = config["precision"];
 
-    vector<Engine> engineList = importEngines(config["enginesPath"]);
-    Rocket rocket = importRocket(config["rocketPath"], engineList);
+    vector<Engine> engineList;
+    Rocket rocket;
+    try {
+        engineList = importEngines(config.at("enginesPath").get<string>());
+        rocket = importRocket(config.at("rocketPath").get<string>(), engineList);
+    }
+    catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        return false;
+    }
 
-    unsigned long long nCombinations = nCr(precision - 1, rocket.stages.size() - 1);
+    const std::size_t stage_count = rocket.stages.size();
+    if (stage_count < 1) {
+        std::cerr << "Rocket has no stages.\n";
+        return false;
+    }
 
-    if (safeMULT_ULLONG(nCombinations, rocket.stages.size()) + (nCombinations * sizeof(unsigned long)) >= maxRAM) {
+    std::uint64_t nCombinations = nCr(precision - 1, static_cast<int>(stage_count) - 1);
+    if (nCombinations == 0) {
+        std::cerr << "No combinations generated.\n";
+        return false;
+    }
+
+    unsigned long long distributionsBytes = safeMULT_ULLONG(nCombinations, static_cast<unsigned long long>(stage_count)); // uint8_t
+    unsigned long long massesBytes = safeMULT_ULLONG(nCombinations, static_cast<unsigned long long>(sizeof(MassType)));
+    unsigned long long requiredBytes = safeAdd_ULLONG(distributionsBytes, massesBytes);
+    if (requiredBytes >= maxRAM) {
         std::cerr << "Precision too high for the amount of stages.\n";
-        std::cerr << "Maximum precision for current stages and RAM: " << calcMaxPrecUp(precision, rocket.stages.size(), maxRAM, nCombinations) << "\n";
+        std::cerr << "Maximum precision for current stages and RAM: "
+                  << calcMaxPrecUp(precision, static_cast<int>(stage_count), maxRAM, sizeof(MassType)) << "\n";
         return false;
     }
 
     if (options.print_output) {
         std::cout << "For the number of stages and RAM currently given, the maximum precision can be raised to: "
-                  << calcMaxPrecDown(255, rocket.stages.size(), maxRAM, nCombinations) << "\n\n";
+                  << calcMaxPrecDown(255, static_cast<int>(stage_count), maxRAM, sizeof(MassType)) << "\n\n";
         std::cout << "# Combinations: " << nCombinations << "\n\n";
     }
 
@@ -541,8 +566,18 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         useMultiCore = (nThreads > 1);
     }
 
-    unsigned char* distributions = new unsigned char[nCombinations * rocket.stages.size()];
-    unsigned long* massDistributions = new unsigned long[nCombinations];
+    if (nThreads < 1) {
+        nThreads = 1;
+    }
+    if (static_cast<std::uint64_t>(nThreads) > nCombinations) {
+        nThreads = static_cast<int>(nCombinations);
+        if (nThreads < 1) {
+            nThreads = 1;
+        }
+    }
+
+    unsigned char* distributions = new unsigned char[static_cast<std::size_t>(nCombinations) * stage_count];
+    MassType* massDistributions = new MassType[static_cast<std::size_t>(nCombinations)];
 
     auto total_start = Clock::now();
 
@@ -551,10 +586,25 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     auto fill_end = Clock::now();
 
     auto tuple_start = Clock::now();
-    createTuple(distributions, rocket.stages.size(), nCombinations, precision);
+    std::uint64_t generated = createTuple(distributions, rocket.stages.size(), nCombinations, precision);
+    if (generated != nCombinations) {
+        std::cerr << "Tuple generation failed (generated " << generated << " of " << nCombinations << ").\n";
+        delete[] distributions;
+        delete[] massDistributions;
+        return false;
+    }
     auto tuple_end = Clock::now();
 
-    std::fill_n(massDistributions, nCombinations, 0);
+    if (verbose) {
+        if (!validateDistributions(distributions, stage_count, nCombinations, precision, 100000)) {
+            std::cerr << "Distribution validation failed.\n";
+            delete[] distributions;
+            delete[] massDistributions;
+            return false;
+        }
+    }
+
+    std::fill_n(massDistributions, nCombinations, 0.0);
 
     auto mass_start = Clock::now();
     if (options.print_output) {
@@ -566,39 +616,47 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         }
     }
 
-    long long threadBlock = (nCombinations / nThreads);
-    std::vector<std::thread> threads;
-    threads.reserve(nThreads);
+    if (nThreads == 1) {
+        distMass(verbose, 0, nCombinations, nCombinations, rocket, massDistributions, distributions, precision);
+    }
+    else {
+        std::uint64_t threadBlock = nCombinations / static_cast<std::uint64_t>(nThreads);
+        std::vector<std::thread> threads;
+        threads.reserve(static_cast<std::size_t>(nThreads));
 
-    for (int k = 0, begin = 0, end = threadBlock; k < nThreads; k++, begin += threadBlock, end += threadBlock) {
-        threads.push_back(
-            std::thread([verbose, begin, end, nCombinations, rocket, massDistributions, distributions, precision] {
+        for (int t = 0; t < nThreads; t++) {
+            std::uint64_t begin = static_cast<std::uint64_t>(t) * threadBlock;
+            std::uint64_t end = (t == nThreads - 1) ? nCombinations : begin + threadBlock;
+            threads.push_back(std::thread([verbose, begin, end, nCombinations, &rocket, massDistributions, distributions, precision] {
                 distMass(verbose, begin, end, nCombinations, rocket, massDistributions, distributions, precision);
-                })
-        );
-    }
+            }));
+        }
 
-    for (auto& th : threads) {
-        th.join();
-    }
-
-    for (int i = threadBlock * nThreads; i < nCombinations; i++) {
-        distMass(verbose, i, nCombinations, nCombinations, rocket, massDistributions, distributions, precision);
+        for (auto& th : threads) {
+            th.join();
+        }
     }
     auto mass_end = Clock::now();
 
     auto min_start = Clock::now();
-    unsigned long min = ULONG_MAX;
-    long long index = 0;
-    unsigned char* bestDistro = new unsigned char[rocket.stages.size()];
-    for (int i = 0; i < nCombinations; i++) {
-        if (massDistributions[i] < min) {
-            min = massDistributions[i];
+    MassType min = std::numeric_limits<MassType>::infinity();
+    std::uint64_t index = 0;
+    unsigned char* bestDistro = new unsigned char[stage_count];
+    for (std::uint64_t i = 0; i < nCombinations; i++) {
+        if (massDistributions[static_cast<std::size_t>(i)] < min) {
+            min = massDistributions[static_cast<std::size_t>(i)];
             index = i;
-            for (int j = 0; j < rocket.stages.size(); j++) {
+            for (std::size_t j = 0; j < stage_count; j++) {
                 bestDistro[j] = distributions[j * nCombinations + i];
             }
         }
+    }
+    if (!std::isfinite(min)) {
+        std::cerr << "No feasible solution found (all distributions invalid).\n";
+        delete[] distributions;
+        delete[] massDistributions;
+        delete[] bestDistro;
+        return false;
     }
     auto min_end = Clock::now();
     auto total_end = Clock::now();
@@ -613,8 +671,8 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     summary.timings = timings;
     summary.n_combinations = nCombinations;
     summary.min_mass = min;
-    summary.min_index = index;
-    summary.stage_count = static_cast<int>(rocket.stages.size());
+    summary.min_index = static_cast<long long>(index);
+    summary.stage_count = static_cast<int>(stage_count);
     summary.precision = precision;
     summary.threads_used = nThreads;
 
@@ -623,16 +681,17 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         std::cout << timings.tuple_seconds << " seconds to create the tuple of all possible distributions\n\n";
         std::cout << timings.mass_seconds << " seconds to calculate mass of all possible distributions\n\n";
         std::cout << timings.min_seconds << " seconds to find minimum mass" << "\n";
-        std::cout << min << " kg at Distribution number " << index << "\n";
-        std::cout << (min / 1000) << " t" << "\n\n";
+        std::uint64_t min_kg = static_cast<std::uint64_t>(std::ceil(min));
+        std::cout << min_kg << " kg at Distribution number " << index << "\n";
+        std::cout << (static_cast<double>(min_kg) / 1000.0) << " t" << "\n\n";
         std::cout << "best deltaV distribution is:\n";
-        double* newArr = new double[rocket.stages.size()];
-        newArr = ArrToPerc(newArr, bestDistro, rocket.stages.size(), precision);
-        outputArr(newArr, rocket.stages.size());
+        double* newArr = new double[stage_count];
+        newArr = ArrToPerc(newArr, bestDistro, static_cast<int>(stage_count), precision);
+        outputArr(newArr, static_cast<int>(stage_count));
         std::cout << "\n";
-        for (int i = 0; i < rocket.stages.size(); i++) {
-            std::cout << "Stage " << rocket.stages.size() - i << ":\t"
-                      << ((((double)bestDistro[i]) / precision) * rocket.deltaV) << "\n";
+        for (std::size_t i = 0; i < stage_count; i++) {
+            std::cout << "Stage " << stage_count - i << ":\t"
+                      << ((static_cast<double>(bestDistro[i]) / precision) * rocket.deltaV) << "\n";
         }
         delete[] newArr;
     }
@@ -864,7 +923,14 @@ int main(int argc, char** argv)
         config_path = options.benchmark_config_path;
     }
 
-    json config = readJson(config_path);
+    json config;
+    try {
+        config = readJson(config_path);
+    }
+    catch (const std::exception& e) {
+        std::cerr << e.what() << "\n";
+        return 1;
+    }
 
     if (options.benchmark) {
         return runBenchmark(config, options, config_path);
