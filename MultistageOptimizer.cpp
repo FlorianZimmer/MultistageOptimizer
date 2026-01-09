@@ -59,6 +59,7 @@ Legacy changelog (pre-continuous releases):
 #include "util/budget_config.hpp"
 #include "util/config_parsing.hpp"
 #include "util/format_numbers.hpp"
+#include "util/gpu_memory.hpp"
 #include "util/text_table.hpp"
 
 using namespace std;
@@ -67,6 +68,9 @@ using MassType = double;
 struct MemoryCounters {
     std::uint64_t working_set_bytes = 0;
     std::uint64_t private_bytes = 0;
+    std::uint64_t gpu_used_bytes = 0;
+    std::uint64_t gpu_total_bytes = 0;
+    bool gpu_available = false;
 };
 
 static bool readCurrentProcessMemory(MemoryCounters& out)
@@ -88,14 +92,43 @@ static bool readCurrentProcessMemory(MemoryCounters& out)
 #endif
 }
 
+static bool readCurrentProcessGpuMemory(MemoryCounters& out)
+{
+    util::GpuMemorySample sample = util::sampleProcessGpuMemory();
+    if (!sample.available) {
+        return false;
+    }
+    out.gpu_used_bytes = sample.used_bytes;
+    out.gpu_total_bytes = sample.total_bytes;
+    out.gpu_available = true;
+    return true;
+}
+
 template <typename Fn>
 static bool runWithPeakMemory(Fn&& fn, MemoryCounters& peak_out, int sample_ms = 5)
 {
     std::atomic<bool> stop{false};
     MemoryCounters peak;
 
+    std::uint64_t gpu_baseline_used = 0;
+    std::uint64_t gpu_peak_used = 0;
+    std::uint64_t gpu_total_bytes = 0;
+    bool gpu_baseline_set = false;
+    bool gpu_available = false;
+
     if (sample_ms < 0) {
         sample_ms = 0;
+    }
+
+    {
+        MemoryCounters baseline;
+        if (readCurrentProcessGpuMemory(baseline)) {
+            gpu_available = true;
+            gpu_baseline_set = true;
+            gpu_baseline_used = baseline.gpu_used_bytes;
+            gpu_peak_used = baseline.gpu_used_bytes;
+            gpu_total_bytes = baseline.gpu_total_bytes;
+        }
     }
 
     std::thread sampler([&] {
@@ -104,6 +137,18 @@ static bool runWithPeakMemory(Fn&& fn, MemoryCounters& peak_out, int sample_ms =
             if (readCurrentProcessMemory(current)) {
                 peak.working_set_bytes = std::max(peak.working_set_bytes, current.working_set_bytes);
                 peak.private_bytes = std::max(peak.private_bytes, current.private_bytes);
+            }
+            if (readCurrentProcessGpuMemory(current)) {
+                gpu_available = true;
+                gpu_total_bytes = std::max(gpu_total_bytes, current.gpu_total_bytes);
+                if (!gpu_baseline_set) {
+                    gpu_baseline_set = true;
+                    gpu_baseline_used = current.gpu_used_bytes;
+                    gpu_peak_used = current.gpu_used_bytes;
+                }
+                else {
+                    gpu_peak_used = std::max(gpu_peak_used, current.gpu_used_bytes);
+                }
             }
             if (stop.load(std::memory_order_relaxed)) {
                 break;
@@ -126,6 +171,12 @@ static bool runWithPeakMemory(Fn&& fn, MemoryCounters& peak_out, int sample_ms =
 
     stop.store(true, std::memory_order_relaxed);
     sampler.join();
+
+    if (gpu_available && gpu_baseline_set) {
+        peak.gpu_total_bytes = gpu_total_bytes;
+        peak.gpu_used_bytes = (gpu_peak_used > gpu_baseline_used) ? (gpu_peak_used - gpu_baseline_used) : 0;
+        peak.gpu_available = true;
+    }
     peak_out = peak;
     return ok;
 }
@@ -646,6 +697,7 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
     }
 
     optimizer::FullGridMode full_grid_mode = optimizer::FullGridMode::Materialize;
+    const bool full_grid_mode_explicit = config.contains("fullGridMode") || !options.full_grid_mode_override.empty();
     if (config.contains("fullGridMode")) {
         if (!config["fullGridMode"].is_string()) {
             std::cerr << "Invalid fullGridMode value in config.\n";
@@ -862,6 +914,14 @@ static bool runOptimization(const json& config, const RunOptions& options, Optim
         (!zoom_enabled && resolved_backend.mode == backend::Mode::Cuda && resolved_backend.plugin.has_value() && resolved_backend.plugin->loaded());
     const bool effective_streaming_mode =
         (full_grid_mode == optimizer::FullGridMode::Streaming) || using_cuda_backend;
+
+    if (using_cuda_backend && full_grid_mode_explicit) {
+        static bool warned_full_grid_mode_ignored_for_cuda = false;
+        if (!warned_full_grid_mode_ignored_for_cuda) {
+            warned_full_grid_mode_ignored_for_cuda = true;
+            std::cerr << "Note: fullGridMode has no effect when using the CUDA backend; distributions are always enumerated on the device.\n";
+        }
+    }
 
     std::uint64_t max_combinations_budget = 0;
     util::BudgetBackend budget_backend = using_cuda_backend ? util::BudgetBackend::Cuda : util::BudgetBackend::Cpu;
@@ -1328,6 +1388,7 @@ static void appendBenchmarkCsv(const string& path,
                                const OptimizationSummary& summary,
                                const BenchmarkTimings& average_timings,
                                const BenchmarkTimings& worst_timings,
+                               const MemoryCounters& peak_memory,
                                const ProgramOptions& options,
                                const string& status)
 {
@@ -1347,7 +1408,7 @@ static void appendBenchmarkCsv(const string& path,
     }
 
     if (needs_header) {
-        file << "timestamp_utc,benchmark_version,git_head,config_path,rocket_path,engines_path,precision,stages,n_combinations,threads,iterations,warmup,max_total_seconds,fill_avg,tuple_avg,mass_avg,min_avg,total_avg,fill_max,tuple_max,mass_max,min_max,total_max,status\n";
+        file << "timestamp_utc,benchmark_version,git_head,config_path,rocket_path,engines_path,precision,stages,n_combinations,threads,iterations,warmup,max_total_seconds,fill_avg,tuple_avg,mass_avg,min_avg,total_avg,fill_max,tuple_max,mass_max,min_max,total_max,memory_peak_working_set_bytes,memory_peak_private_bytes,gpu_memory_peak_used_bytes,gpu_memory_total_bytes,gpu_memory_available,status\n";
     }
 
     std::time_t now = std::time(nullptr);
@@ -1381,6 +1442,11 @@ static void appendBenchmarkCsv(const string& path,
          << worst_timings.mass_seconds << ","
          << worst_timings.min_seconds << ","
          << worst_timings.total_seconds << ",";
+    file << peak_memory.working_set_bytes << ",";
+    file << peak_memory.private_bytes << ",";
+    file << peak_memory.gpu_used_bytes << ",";
+    file << peak_memory.gpu_total_bytes << ",";
+    file << (peak_memory.gpu_available ? "true" : "false") << ",";
     file << csvEscape(status);
     file << "\n";
 }
@@ -1435,13 +1501,21 @@ static int runBenchmark(const json& config, const ProgramOptions& options, const
 
     BenchmarkTimings total_timings;
     BenchmarkTimings worst_timings;
+    MemoryCounters worst_memory;
     bool first_sample = true;
 
     for (int i = 0; i < options.benchmark_iterations; i++) {
         OptimizationSummary sample_summary;
-        if (!runOptimization(config, run_options, sample_summary)) {
+        MemoryCounters peak;
+        bool ok = runWithPeakMemory([&] { return runOptimization(config, run_options, sample_summary); }, peak);
+        if (!ok) {
             return 1;
         }
+        worst_memory.working_set_bytes = std::max(worst_memory.working_set_bytes, peak.working_set_bytes);
+        worst_memory.private_bytes = std::max(worst_memory.private_bytes, peak.private_bytes);
+        worst_memory.gpu_used_bytes = std::max(worst_memory.gpu_used_bytes, peak.gpu_used_bytes);
+        worst_memory.gpu_total_bytes = std::max(worst_memory.gpu_total_bytes, peak.gpu_total_bytes);
+        worst_memory.gpu_available = worst_memory.gpu_available || peak.gpu_available;
         if (first_sample) {
             summary = sample_summary;
             worst_timings = sample_summary.timings;
@@ -1472,6 +1546,11 @@ static int runBenchmark(const json& config, const ProgramOptions& options, const
     std::cout << "  \"n_combinations\": " << summary.n_combinations << ",\n";
     std::cout << "  \"threads\": " << summary.threads_used << ",\n";
     std::cout << "  \"min_mass\": " << summary.min_mass << ",\n";
+    std::cout << "  \"memory_peak_working_set_bytes\": " << worst_memory.working_set_bytes << ",\n";
+    std::cout << "  \"memory_peak_private_bytes\": " << worst_memory.private_bytes << ",\n";
+    std::cout << "  \"gpu_memory_peak_used_bytes\": " << worst_memory.gpu_used_bytes << ",\n";
+    std::cout << "  \"gpu_memory_total_bytes\": " << worst_memory.gpu_total_bytes << ",\n";
+    std::cout << "  \"gpu_memory_available\": " << (worst_memory.gpu_available ? "true" : "false") << ",\n";
     std::cout << "  \"best_distribution_units\": ";
     printDistributionArray(summary.best_distribution);
     std::cout << ",\n";
@@ -1505,6 +1584,7 @@ static int runBenchmark(const json& config, const ProgramOptions& options, const
                        summary,
                        average_timings,
                        worst_timings,
+                       worst_memory,
                        options,
                        status);
 
@@ -1567,6 +1647,9 @@ static bool runStrategyBenchmark(const std::string& name,
         }
         worst_memory.working_set_bytes = std::max(worst_memory.working_set_bytes, peak.working_set_bytes);
         worst_memory.private_bytes = std::max(worst_memory.private_bytes, peak.private_bytes);
+        worst_memory.gpu_used_bytes = std::max(worst_memory.gpu_used_bytes, peak.gpu_used_bytes);
+        worst_memory.gpu_total_bytes = std::max(worst_memory.gpu_total_bytes, peak.gpu_total_bytes);
+        worst_memory.gpu_available = worst_memory.gpu_available || peak.gpu_available;
         if (first_sample) {
             out.summary = sample_summary;
             worst_timings = sample_summary.timings;
@@ -1606,6 +1689,9 @@ static json strategyToJson(const StrategyBenchmarkResult& result)
     out["min_mass"] = result.summary.min_mass;
     out["memory_peak_working_set_bytes"] = result.peak_memory.working_set_bytes;
     out["memory_peak_private_bytes"] = result.peak_memory.private_bytes;
+    out["gpu_memory_peak_used_bytes"] = result.peak_memory.gpu_used_bytes;
+    out["gpu_memory_total_bytes"] = result.peak_memory.gpu_total_bytes;
+    out["gpu_memory_available"] = result.peak_memory.gpu_available;
 
     out["best_distribution_units"] = json::array();
     for (unsigned char v : result.summary.best_distribution) {
@@ -1736,6 +1822,24 @@ static void printBenchmarkCompareTable(const std::vector<StrategyBenchmarkResult
             return std::string{};
         }
         return formatMiBForTable(r.peak_memory.private_bytes, 2);
+    }));
+    rows.push_back(metricRow("gpu_mem_available", [](const StrategyBenchmarkResult& r) {
+        if (r.status == "error") {
+            return std::string{};
+        }
+        return r.peak_memory.gpu_available ? std::string("true") : std::string("false");
+    }));
+    rows.push_back(metricRow("gpu_mem_peak_used", [](const StrategyBenchmarkResult& r) {
+        if (r.status == "error" || !r.peak_memory.gpu_available) {
+            return std::string{};
+        }
+        return formatMiBForTable(r.peak_memory.gpu_used_bytes, 2);
+    }));
+    rows.push_back(metricRow("gpu_mem_total", [](const StrategyBenchmarkResult& r) {
+        if (r.status == "error" || !r.peak_memory.gpu_available || r.peak_memory.gpu_total_bytes == 0) {
+            return std::string{};
+        }
+        return formatMiBForTable(r.peak_memory.gpu_total_bytes, 2);
     }));
     rows.push_back(metricRow("min_mass", [](const StrategyBenchmarkResult& r) {
         if (r.status == "error") {

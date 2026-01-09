@@ -89,6 +89,8 @@ Benchmark JSON output includes:
 - `min_mass`
 - `best_distribution_units` (discretized deltaV units per stage)
 - `best_distribution_dv_mps` (derived deltaV per stage)
+- `memory_peak_working_set_bytes` / `memory_peak_private_bytes` (host RAM usage of the process)
+- `gpu_memory_peak_used_bytes` / `gpu_memory_total_bytes` (best-effort GPU VRAM delta during the run; requires NVIDIA NVML, otherwise `gpu_memory_available=false`)
 
 ### Strategy compare wrapper
 
