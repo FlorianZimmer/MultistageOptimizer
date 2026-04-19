@@ -50,7 +50,7 @@ jobs:
           Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
-          Copy-Item "build\\Release\\MultistageOptimizer.exe" dist/
+          Copy-Item "build\\bin\\Release\\MultistageOptimizer.exe" dist/
           Copy-Item "LICENSE.md" dist/
           Copy-Item "README.md" dist/
           Copy-Item -Recurse "config" dist/config

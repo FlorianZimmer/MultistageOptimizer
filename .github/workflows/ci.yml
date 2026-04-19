@@ -23,7 +23,7 @@ jobs:
           BENCHMARK_MAX_SECONDS: 10
           BENCHMARK_MAX_MIN_SECONDS: 1
         run: |
-          $exe = "build\\Release\\MultistageOptimizer.exe"
+          $exe = "build\\bin\\Release\\MultistageOptimizer.exe"
           if (!(Test-Path $exe)) { throw "Missing executable at $exe" }
           $csv = Join-Path $env:RUNNER_TEMP "benchmark_results.csv"
           $output = & $exe --benchmark --benchmark-config config/benchmark_ci.json --benchmark-threads 1 --benchmark-iterations 1 --benchmark-warmup 1 --benchmark-max-seconds $env:BENCHMARK_MAX_SECONDS --benchmark-csv $csv --no-prompt | Out-String
